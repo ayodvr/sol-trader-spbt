@@ -134,9 +134,9 @@ export class GrpcWatcher {
       this.startHealthCheck();
 
     } catch (err: any) {
-      logger.error({ 
-        err: err.message, 
-        code: err.code, 
+      logger.error({
+        err: err.message,
+        code: err.code,
         details: err.details,
         full: err
       }, '❌ gRPC connection failed');
@@ -167,13 +167,10 @@ export class GrpcWatcher {
           failed: false,
         },
       },
-      blocks: {},
       blocksMeta: {
         blockhash: {}
       },
-      entry: {},
-      accountsDataSlice: [],
-      commitment: 0, // CommitmentLevel.PROCESSED = 0
+      commitment: 0, // CommitmentLevel.PROCESSED = 0 (lazy import; value hardcoded for Windows compat)
     };
 
     if (this.lastSlot > 0) {
@@ -320,7 +317,7 @@ export class GrpcWatcher {
   }
 
   private handleError(err: any): void {
-    logger.error({ 
+    logger.error({
       err: err.message || err,
       code: err.code,
       details: err.details
@@ -356,8 +353,8 @@ export class GrpcWatcher {
       this.healthCheckInterval = null;
     }
     if (this.stream) {
-      try { this.stream.end(); } catch {}
-      try { this.stream.destroy(); } catch {}
+      try { this.stream.end(); } catch { }
+      try { this.stream.destroy(); } catch { }
       this.stream = null;
     }
     this.client = null as any;
