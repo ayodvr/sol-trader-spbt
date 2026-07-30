@@ -150,6 +150,7 @@ export class GrpcWatcher {
     // @ts-ignore — yellowstone-grpc SubscribeRequest type is stricter than actual runtime API
     const request: SubscribeRequest = {
       slots: { slot_sub: {} },
+      accounts: {},
       transactions: {
         pump_bonding_curve: {
           accountInclude: [CONFIG.PUMP_PROGRAM_ID.toBase58()],
@@ -166,10 +167,13 @@ export class GrpcWatcher {
           failed: false,
         },
       },
+      blocks: {},
       blocksMeta: {
         blockhash: {}
       },
-      commitment: 0, // CommitmentLevel.PROCESSED = 0 (lazy import; value hardcoded for Windows compat)
+      entry: {},
+      accountsDataSlice: [],
+      commitment: 0, // CommitmentLevel.PROCESSED = 0
     };
 
     if (this.lastSlot > 0) {
