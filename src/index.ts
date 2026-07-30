@@ -313,23 +313,25 @@ async function main() {
       // Fix 19: Triton v5 NaaE — Rust-native gRPC engine (~400% throughput vs standard)
       logger.info('🚀 Starting Triton v5 NaaE gRPC watcher (Rust-native)');
       const grpcWatcher = new GrpcWatcherV5();
-      await grpcWatcher.start(handleNewBondingCurveToken);
-      process.on('SIGINT', () => { grpcWatcher.stop(); shutdown(); });
-      process.on('SIGTERM', () => { grpcWatcher.stop(); shutdown(); });
+      activeWatcher = grpcWatcher;
     } else {
       const grpcWatcher = new GrpcWatcher();
-      await grpcWatcher.start(handleNewBondingCurveToken);
-      process.on('SIGINT', () => { grpcWatcher.stop(); shutdown(); });
-      process.on('SIGTERM', () => { grpcWatcher.stop(); shutdown(); });
+      activeWatcher = grpcWatcher;
     }
   } else {
     logger.warn('No gRPC configured — using WebSocket (slower, less reliable)');
     logger.warn('Set GRPC_ENDPOINT and GRPC_TOKEN in .env for 3x faster detection');
     const wsWatcher = new PumpWatcher();
-    wsWatcher.start(handleNewBondingCurveToken);
-    process.on('SIGINT', () => { wsWatcher.stop(); shutdown(); });
-    process.on('SIGTERM', () => { wsWatcher.stop(); shutdown(); });
+    activeWatcher = wsWatcher;
   }
+
+  // Only connect if not paused
+  if (botState.isRunning && activeWatcher) {
+    activeWatcher.start(watcherCallback);
+  }
+
+  process.on('SIGINT', () => { if (activeWatcher) activeWatcher.stop(); shutdown(); });
+  process.on('SIGTERM', () => { if (activeWatcher) activeWatcher.stop(); shutdown(); });
 
   // ─────────────────────────────────────────────────────────────
   //  TRACK 2: PumpSwap AMM (graduated tokens)
