@@ -46,6 +46,7 @@ export class GrpcWatcher {
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 50;
   private isRunning: boolean = false;
+  private isConnecting: boolean = false;
   private onNewToken: ((event: NewTokenEvent) => void) | null = null;
   private onAmmPool: ((pool: any) => void) | null = null;
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
@@ -337,17 +338,24 @@ export class GrpcWatcher {
 
   private async scheduleReconnect(): Promise<void> {
     if (!this.isRunning) return;
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      logger.error('Max reconnection attempts reached');
-      return;
+    if (this.isConnecting) return;
+    this.isConnecting = true;
+
+    try {
+      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+        logger.error('Max reconnection attempts reached');
+        return;
+      }
+
+      this.reconnectAttempts++;
+      const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 60_000);
+      logger.info({ attempt: this.reconnectAttempts, delay: `${(delay / 1000).toFixed(0)}s` }, 'Scheduling gRPC reconnection');
+
+      await new Promise(resolve => setTimeout(resolve, delay));
+      if (this.isRunning) await this.connect();
+    } finally {
+      this.isConnecting = false;
     }
-
-    this.reconnectAttempts++;
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 60_000);
-    logger.info({ attempt: this.reconnectAttempts, delay: `${(delay / 1000).toFixed(0)}s` }, 'Scheduling gRPC reconnection');
-
-    await new Promise(resolve => setTimeout(resolve, delay));
-    if (this.isRunning) await this.connect();
   }
 
   private cleanup(): void {
