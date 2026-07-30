@@ -168,6 +168,7 @@ export class GrpcWatcher {
           failed: false,
         },
       },
+      transactionsStatus: {},
       blocks: {},
       blocksMeta: {
         blockhash: {}
@@ -382,6 +383,7 @@ export class GrpcWatcher {
             slots: {},
             accounts: {},
             transactions: {},
+            transactionsStatus: {},
             blocks: {},
             blocksMeta: {},
             entry: {},
