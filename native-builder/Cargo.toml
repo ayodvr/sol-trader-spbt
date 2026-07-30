@@ -1,0 +1,29 @@
+[package]
+name = "pump-native-builder"
+version = "1.0.0"
+edition = "2021"
+description = "Rust-native Pump.fun instruction builder via napi-rs — sub-millisecond buy/sell instruction construction"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", features = ["default", "serde-json", "napi8"] }
+napi-derive = "2"
+solana-sdk = "1.18"
+solana-program = "1.18"
+spl-token = "4"
+bs58 = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+hex = "0.4"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true

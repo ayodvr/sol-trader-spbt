@@ -1,0 +1,26 @@
+import { PublicKey } from '@solana/web3.js';
+export declare const CONFIG: {
+    PRIVATE_KEY: string;
+    TELEGRAM_CHAT_ID: string | undefined;
+    DRY_RUN: boolean;
+    RPC_URL: string;
+    WS_URL: string;
+    GRPC_TOKEN: string;
+    JITO_BLOCK_ENGINE: string;
+    DYNAMIC_TIPPING_ENABLED: boolean;
+    JITO_MIN_TIP_SOL: number;
+    JITO_MAX_TIP_SOL: number;
+    JITO_TIP_LAMPORTS: number;
+    SNIPE_AMOUNT_LAMPORTS: number;
+    MAX_BUY_TAX: number;
+    MAX_SELL_TAX: number;
+    REQUIRE_SOCIALS: boolean;
+    MIN_DEV_HISTORY_SCORE: number;
+    BIRDEYE_API_KEY: string;
+    EXIT_PROFIT_PERCENT: number;
+    EXIT_DRAWDOWN_PERCENT: number;
+    PUMP_PROGRAM_ID: PublicKey;
+    PUMP_AMM_PROGRAM_ID: PublicKey;
+    GLOBAL_ACCOUNT: PublicKey;
+    SOL_MINT: PublicKey;
+};

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+wallets.json
+wallet-state.json
+*.log
+native-builder/target/
+native-builder/*.node
+native-builder/index.js
+native-builder/index.d.ts

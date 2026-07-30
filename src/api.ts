@@ -1,0 +1,239 @@
+import express from 'express';
+import cors from 'cors';
+import pino from 'pino';
+import fs from 'fs';
+import path from 'path';
+
+const logger = pino({ name: 'api' });
+
+export interface BotState {
+  isRunning: boolean;
+  isTestMode: boolean;
+  stats: any;
+  activePositions: any[];
+  tradeHistory: any[];
+  walletStats: () => any;
+  recentLogs: any[];
+}
+
+export interface BotControls {
+  start: () => void;
+  stop: () => void;
+  updateConfig: (updates: Record<string, string>) => void;
+}
+
+// Fix 22: Restrict CORS to configured dashboard URL + localhost dev
+function buildCorsOptions() {
+  const allowedOrigins: string[] = [
+    'http://localhost:5173',
+    'http://localhost:4173',
+    'http://127.0.0.1:5173',
+  ];
+
+  const dashboardUrl = process.env.DASHBOARD_URL;
+  if (dashboardUrl) {
+    allowedOrigins.push(dashboardUrl);
+    // Also allow preview deployments on Vercel (e.g. sinper-dashboard-abc123.vercel.app)
+    try {
+      const host = new URL(dashboardUrl).hostname;
+      const baseDomain = host.split('.').slice(-2).join('.');
+      if (baseDomain === 'vercel.app') {
+        // Allow all *.vercel.app subdomains for this project (Vercel preview URLs)
+        allowedOrigins.push(/\.vercel\.app$/ as any);
+      }
+    } catch {}
+  }
+
+  return {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      // Allow requests with no origin (e.g. same-host, curl, mobile apps)
+      if (!origin) return callback(null, true);
+
+      const allowed = allowedOrigins.some(o =>
+        typeof o === 'string' ? o === origin : (o as RegExp).test(origin)
+      );
+
+      if (allowed) {
+        callback(null, true);
+      } else {
+        logger.warn({ origin }, 'CORS: blocked request from disallowed origin');
+        callback(new Error(`CORS blocked: ${origin}`));
+      }
+    },
+    credentials: true,
+  };
+}
+
+export function startApi(state: BotState, controls: BotControls) {
+  const app = express();
+
+  // Fix 22: restricted CORS
+  app.use(cors(buildCorsOptions()));
+  app.use(express.json());
+
+  // Security Middleware — accepts key from header OR query param (EventSource needs query param)
+  const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const apiKey = (req.headers['x-api-key'] as string) || (req.query['x-api-key'] as string);
+    const validKey = process.env.API_SECRET_KEY;
+
+    if (!validKey) {
+      logger.fatal('API_SECRET_KEY not set in .env! API is disabled for safety.');
+      return res.status(500).json({ error: 'Server misconfiguration: No API key set' });
+    }
+
+    if (apiKey !== validKey) {
+      logger.warn({ ip: req.ip }, 'Unauthorized API access attempt blocked');
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    next();
+  };
+
+  // Fix 20: SSE clients registry
+  const sseClients = new Set<express.Response>();
+
+  // Helper to safely serialize BigInts
+  const jsonReplacer = (key: string, value: any) =>
+    typeof value === 'bigint' ? value.toString() : value;
+
+  app.set('json replacer', jsonReplacer);
+
+  // Broadcast state change to all SSE clients
+  function broadcastUpdate() {
+    if (sseClients.size === 0) return;
+    const payload = JSON.stringify({
+      isRunning: state.isRunning,
+      isTestMode: state.isTestMode,
+      stats: state.stats,
+      activePositions: state.activePositions,
+      tradeHistory: state.tradeHistory.slice(0, 20),
+      walletStats: state.walletStats(),
+      recentLogs: state.recentLogs,
+    }, jsonReplacer);
+    for (const client of sseClients) {
+      try {
+        client.write(`data: ${payload}\n\n`);
+      } catch {
+        sseClients.delete(client);
+      }
+    }
+  }
+
+  // Fix 20: SSE endpoint — real-time push to dashboard
+  app.get('/events', authMiddleware, (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering
+    res.flushHeaders();
+
+    // Send initial state immediately on connect
+    const initialPayload = JSON.stringify({
+      isRunning: state.isRunning,
+      isTestMode: state.isTestMode,
+      stats: state.stats,
+      activePositions: state.activePositions,
+      tradeHistory: state.tradeHistory.slice(0, 20),
+      walletStats: state.walletStats(),
+      recentLogs: state.recentLogs,
+    }, jsonReplacer);
+    res.write(`data: ${initialPayload}\n\n`);
+
+    sseClients.add(res);
+    logger.info({ totalClients: sseClients.size }, '📡 SSE client connected');
+
+    // Keepalive ping every 25s (prevents proxy timeout)
+    const keepalive = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(keepalive);
+        sseClients.delete(res);
+      }
+    }, 25_000);
+
+    req.on('close', () => {
+      clearInterval(keepalive);
+      sseClients.delete(res);
+      logger.info({ totalClients: sseClients.size }, '📡 SSE client disconnected');
+    });
+  });
+
+  // Push broadcast function onto controls so bot can trigger it on state change
+  (controls as any).broadcastUpdate = broadcastUpdate;
+
+  // ─── Real-time heartbeat: push live state to all SSE clients every 2s ───
+  // This ensures the dashboard always has fresh data (positions, P&L, logs)
+  // without requiring the bot to manually call broadcastUpdate on every event.
+  setInterval(() => {
+    if (sseClients.size > 0) broadcastUpdate();
+  }, 2000);
+
+  // Polling fallback: GET /status (kept for compatibility)
+  app.get('/status', authMiddleware, (req, res) => {
+    res.json({
+      isRunning: state.isRunning,
+      isTestMode: state.isTestMode,
+      stats: state.stats,
+      activePositions: state.activePositions,
+      tradeHistory: state.tradeHistory,
+      walletStats: state.walletStats(),
+      recentLogs: state.recentLogs,
+    });
+  });
+
+  // Start / Stop the bot
+  app.post('/control', authMiddleware, (req, res) => {
+    const { action } = req.body;
+    if (action === 'start') {
+      controls.start();
+      broadcastUpdate(); // Push to SSE clients immediately
+      res.json({ success: true, message: 'Bot started' });
+    } else if (action === 'stop') {
+      controls.stop();
+      broadcastUpdate();
+      res.json({ success: true, message: 'Bot stopped' });
+    } else {
+      res.status(400).json({ error: 'Invalid action. Use "start" or "stop".' });
+    }
+  });
+
+  // Update .env configuration
+  app.post('/config', authMiddleware, (req, res) => {
+    try {
+      const updates = req.body;
+      const envPath = path.resolve(process.cwd(), '.env');
+
+      let envContent = fs.readFileSync(envPath, 'utf8');
+
+      for (const [key, value] of Object.entries(updates)) {
+        const regex = new RegExp(`^${key}=.*$`, 'm');
+        if (envContent.match(regex)) {
+          envContent = envContent.replace(regex, `${key}=${value}`);
+        } else {
+          envContent += `\n${key}=${value}`;
+        }
+      }
+
+      fs.writeFileSync(envPath, envContent);
+      controls.updateConfig(updates as Record<string, string>);
+      broadcastUpdate(); // Push config change to SSE clients
+
+      logger.info({ keys: Object.keys(updates) }, 'Configuration updated via API');
+      res.json({ success: true, message: 'Configuration updated and applied!' });
+    } catch (err: any) {
+      logger.error({ err: err.message }, 'Failed to update config');
+      res.status(500).json({ error: 'Failed to update configuration' });
+    }
+  });
+
+  const PORT = process.env.API_PORT || 3001;
+  app.listen(PORT as number, '0.0.0.0', () => {
+    const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:5173';
+    logger.info(`🌐 API on port ${PORT} — CORS allowed: localhost + ${dashboardUrl}`);
+    logger.info(`📡 SSE endpoint: http://0.0.0.0:${PORT}/events`);
+  });
+
+  // Expose broadcastUpdate for the main loop to call on position changes
+  return { broadcastUpdate };
+}
