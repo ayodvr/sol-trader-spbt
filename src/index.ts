@@ -28,11 +28,11 @@ function loadPersistedRunning(): boolean {
       const data = JSON.parse(fs.readFileSync(BOT_STATE_FILE, 'utf-8'));
       return data.isRunning !== false; // default to true if not explicitly false
     }
-  } catch {}
+  } catch { }
   return true;
 }
 function savePersistedRunning(value: boolean) {
-  try { fs.writeFileSync(BOT_STATE_FILE, JSON.stringify({ isRunning: value })); } catch {}
+  try { fs.writeFileSync(BOT_STATE_FILE, JSON.stringify({ isRunning: value })); } catch { }
 }
 
 // In-memory log buffer for dashboard
