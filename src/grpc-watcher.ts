@@ -134,7 +134,12 @@ export class GrpcWatcher {
       this.startHealthCheck();
 
     } catch (err: any) {
-      logger.error({ err: err.message }, '❌ gRPC connection failed');
+      logger.error({ 
+        err: err.message, 
+        code: err.code, 
+        details: err.details,
+        full: err
+      }, '❌ gRPC connection failed');
       await this.scheduleReconnect();
     }
   }
@@ -311,7 +316,11 @@ export class GrpcWatcher {
   }
 
   private handleError(err: any): void {
-    logger.error({ err: err.message || err }, 'gRPC stream error');
+    logger.error({ 
+      err: err.message || err,
+      code: err.code,
+      details: err.details
+    }, 'gRPC stream error');
     this.cleanup();
     this.scheduleReconnect();
   }
