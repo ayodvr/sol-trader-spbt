@@ -12,6 +12,10 @@ const logger = pino({ name: 'analyzer' });
 const analysisCache = new Map<string, { result: RugCheckResult; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+// Cache developer history results for 1 hour to prevent redundant Helius API calls (saves massive RPC credits)
+const devHistoryCache = new Map<string, { devScore: number; expiresAt: number }>();
+const DEV_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
 export class RugAnalyzer {
   private connection: Connection;
 
@@ -89,9 +93,9 @@ export class RugAnalyzer {
         result.flags.push('MINT_AUTHORITY_ACTIVE');
         result.score = 0;
         result.safe = false;
-        logger.warn({ mint: mintStr }, '❌ Mint authority still active — instant fail');
+        logger.warn({ mint: mintStr }, '❌ Mint authority still active — instant fail (saved RPC calls)');
         analysisCache.set(mintStr, { result, expiresAt: Date.now() + CACHE_TTL_MS });
-        return result;
+        return result; // SHORT-CIRCUIT EARLY: Stop here! No top holders check, no Helius API calls.
       }
 
       if (mintInfo.freezeAuthority === null) {
@@ -101,25 +105,7 @@ export class RugAnalyzer {
         result.score -= 15;
       }
 
-      // ─── Check 2: Supply distribution ───────────
-      const topHolders = await this.getTopHolders(mint, 10);
-      const totalSupply = mintInfo.supply;
-
-      if (totalSupply > 0n) {
-        let top10Sum = 0n;
-        for (const [, balance] of topHolders) {
-          top10Sum += balance;
-        }
-        result.top10HolderPercent = Number((top10Sum * 10000n) / totalSupply) / 100;
-
-        if (result.top10HolderPercent > 80) {
-          result.flags.push(`TOP_10_HOLDERS: ${result.top10HolderPercent}%`);
-          result.score -= 20;
-          logger.warn({ pct: result.top10HolderPercent }, '⚠️ High holder concentration');
-        }
-      }
-
-      // ─── Check 3: Tax estimation via bonding curve ───────────
+      // ─── Check 2: Tax estimation via bonding curve ───────────
       const curveAccount = await this.connection.getAccountInfo(bondingCurveOrPool);
       if (curveAccount) {
         const view = new DataView(curveAccount.data.buffer);
@@ -139,7 +125,25 @@ export class RugAnalyzer {
         }
       }
 
-      // ─── Check 3b: Volume Spike / Coordinated Pump Detection ───────────
+      // ─── Check 3: Supply distribution ───────────
+      const topHolders = await this.getTopHolders(mint, 10);
+      const totalSupply = mintInfo.supply;
+
+      if (totalSupply > 0n) {
+        let top10Sum = 0n;
+        for (const [, balance] of topHolders) {
+          top10Sum += balance;
+        }
+        result.top10HolderPercent = Number((top10Sum * 10000n) / totalSupply) / 100;
+
+        if (result.top10HolderPercent > 80) {
+          result.flags.push(`TOP_10_HOLDERS: ${result.top10HolderPercent}%`);
+          result.score -= 20;
+          logger.warn({ pct: result.top10HolderPercent }, '⚠️ High holder concentration');
+        }
+      }
+
+      // ─── Check 4: Volume Spike / Coordinated Pump Detection ───────────
       const volumeCheck = await this.checkVolumeSpike(mintStr);
       if (volumeCheck.isCoordinated) {
         // Coordinated pump = wash trading by dev and insiders = INSTANT FAIL
@@ -151,7 +155,7 @@ export class RugAnalyzer {
         return result;
       }
 
-      // ─── Check 4: Developer History via Helius ───────────
+      // ─── Check 5: Developer History via Helius (Cached) ───────────
       if (creator) {
         const devScore = await this.checkDevHistory(creator.toBase58());
         result.devScore = devScore;
@@ -307,21 +311,34 @@ export class RugAnalyzer {
   private async checkDevHistory(creatorStr: string): Promise<number> {
     if (!CONFIG.HELIUS_API_KEY) return 100; // Skip if no API key
 
+    // Return cached dev history score if available (saves Helius credits)
+    const cachedDev = devHistoryCache.get(creatorStr);
+    if (cachedDev && Date.now() < cachedDev.expiresAt) {
+      logger.debug({ creator: creatorStr.slice(0, 8) }, 'Using cached dev history score');
+      return cachedDev.devScore;
+    }
+
     try {
-      const url = `https://api.helius.xyz/v0/addresses/${creatorStr}/transactions?api-key=${CONFIG.HELIUS_API_KEY}&limit=50&type=CREATE_TOKEN`;
+      const url = `https://api.helius.xyz/v0/addresses/${creatorStr}/transactions?api-key=${CONFIG.HELIUS_API_KEY}&limit=20&type=CREATE_TOKEN`;
       const res = await axios.get(url, { timeout: 3000 });
       const transactions: any[] = res.data || [];
 
-      if (transactions.length === 0) return 100; // New wallet, no history — neutral
+      if (transactions.length === 0) {
+        devHistoryCache.set(creatorStr, { devScore: 100, expiresAt: Date.now() + DEV_CACHE_TTL_MS });
+        return 100; // New wallet, no history — neutral
+      }
 
       let rugCount = 0;
       const now = Date.now();
+      let checkedMints = 0;
 
       for (const tx of transactions) {
-        // Check if any token mints from this creator are now worthless/dead
+        if (checkedMints >= 3) break; // Limit RPC lookups to max 3 historic tokens to prevent credit drain
+
         const tokenTransfers = tx.tokenTransfers || [];
         for (const transfer of tokenTransfers) {
           if (transfer.fromUserAccount === creatorStr && transfer.mint) {
+            checkedMints++;
             // Check if this token is still alive via token supply
             try {
               const mintPubkey = new PublicKey(transfer.mint);
@@ -349,6 +366,8 @@ export class RugAnalyzer {
         score,
       }, '🔍 Dev history check complete');
 
+      // Cache the result for 1 hour
+      devHistoryCache.set(creatorStr, { devScore: score, expiresAt: Date.now() + DEV_CACHE_TTL_MS });
       return score;
 
     } catch (err: any) {
