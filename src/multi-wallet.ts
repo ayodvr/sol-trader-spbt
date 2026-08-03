@@ -60,7 +60,7 @@ export class WalletManager {
         this.wallets.push({
           keypair,
           address: keypair.publicKey.toBase58(),
-          balance: CONFIG.DRY_RUN ? 10.0 : 0,
+          balance: CONFIG.DRY_RUN ? 0.3333 : 0,
           inUse: false,
           lastUsed: 0,
           totalSnipes: 0,
@@ -264,11 +264,11 @@ export class WalletManager {
 
   async resetForMode(): Promise<void> {
     if (CONFIG.DRY_RUN) {
-      // Switch to virtual balances
+      // Switch to virtual balances (0.3333 SOL per sub-wallet = 1.0 SOL total)
       for (const w of this.wallets) {
-        w.balance = 10.0;
+        w.balance = 0.3333;
       }
-      logger.info('Switched to Test Mode (Simulated Balances)');
+      logger.info('Switched to Test Mode (1.0 SOL Total Simulated Balance)');
     } else {
       // Switch to real balances
       // Need to pass masterKeypair, but we don't have it here. It will refresh on next maintenance tick.
