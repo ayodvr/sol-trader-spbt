@@ -249,8 +249,9 @@ async function main() {
       // Guard: don't snipe if wallet balance is too low (DRY_RUN safety net)
       if (CONFIG.DRY_RUN) {
         const wStats = walletManager.getStats();
-        if (wStats.totalBalance < 1.0) {
-          logger.warn({ balance: wStats.totalBalance }, '⚠️ Simulated balance too low — pausing new snipes');
+        const minRequired = (CONFIG.SNIPE_AMOUNT_LAMPORTS / 1_000_000_000);
+        if (wStats.totalBalance < minRequired) {
+          logger.warn({ balance: wStats.totalBalance, minRequired }, '⚠️ Simulated balance too low — pausing new snipes');
           return;
         }
       }
@@ -372,8 +373,9 @@ async function main() {
       // Guard: don't snipe if wallet balance is too low (DRY_RUN safety net)
       if (CONFIG.DRY_RUN) {
         const wStats = walletManager.getStats();
-        if (wStats.totalBalance < 1.0) {
-          logger.warn({ balance: wStats.totalBalance }, '⚠️ Simulated balance too low — pausing new AMM snipes');
+        const minRequired = (CONFIG.SNIPE_AMOUNT_LAMPORTS / 1_000_000_000);
+        if (wStats.totalBalance < minRequired) {
+          logger.warn({ balance: wStats.totalBalance, minRequired }, '⚠️ Simulated balance too low — pausing new AMM snipes');
           return;
         }
       }
