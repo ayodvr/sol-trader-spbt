@@ -440,8 +440,8 @@ async function main() {
 
   // ─── Periodic wallet maintenance (every 5 minutes) ───
   setInterval(async () => {
-    await walletManager.sweepWallets(masterKeypair, 3.0, 0.8); // 🧹 Sweep profits > 3 SOL back to master (keep 0.8)
-    await walletManager.refillWallets(masterKeypair, 0.3, 0.8); // ⛽ Refill wallets < 0.3 SOL up to 0.8
+    await walletManager.sweepWallets(masterKeypair, 1.0, 0.3); // 🧹 Sweep profits > 1.0 SOL back to master (keep 0.3)
+    await walletManager.refillWallets(masterKeypair, 0.1, 0.3); // ⛽ Refill wallets < 0.1 SOL up to 0.3
     walletManager.saveState('./wallet-state.json');
 
     if (stats.totalLatencyMs.length > 0) {

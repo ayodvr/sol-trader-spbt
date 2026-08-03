@@ -150,9 +150,17 @@ export class ExitManager {
       const virtualTokenReserves = view.getBigUint64(64, true);
       const virtualSolReserves = view.getBigUint64(72, true);
 
-      currentPrice = virtualTokenReserves > 0n
-        ? Number(virtualSolReserves * 1_000_000_000n / virtualTokenReserves)
-        : 0;
+      // Check if bonding curve completed (complete byte at offset 88 or reserves depleted)
+      const isComplete = curveAccount.data.length > 88 ? curveAccount.data[88] !== 0 : false;
+
+      if (isComplete || virtualTokenReserves < 1_000_000n) {
+        // Curve finished/graduated — cap simulated price to max 10x (1000% gain) to avoid division-by-dust math anomaly
+        currentPrice = pos.entryPrice > 0 ? pos.entryPrice * 10 : 0;
+      } else {
+        currentPrice = virtualTokenReserves > 0n
+          ? Number(virtualSolReserves * 1_000_000_000n / virtualTokenReserves)
+          : 0;
+      }
     }
 
     if (pos.entryPrice === 0) {
@@ -354,7 +362,7 @@ export class ExitManager {
   private async sweepProfits(): Promise<void> {
     try {
       const balance = await this.connection.getBalance(this.wallet.publicKey);
-      const thresholdLamports = 0.6 * LAMPORTS_PER_SOL;
+      const thresholdLamports = 0.3 * LAMPORTS_PER_SOL;
 
       if (balance > thresholdLamports) {
         const sweepAmount = balance - thresholdLamports;
