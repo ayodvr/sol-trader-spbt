@@ -25,29 +25,20 @@ export interface BotControls {
 
 // Fix 22: Restrict CORS to configured dashboard URL + localhost dev
 function buildCorsOptions() {
-  const allowedOrigins: string[] = [
+  const allowedOrigins: (string | RegExp)[] = [
     'http://localhost:5173',
     'http://localhost:4173',
     'http://127.0.0.1:5173',
+    /\.vercel\.app$/,
   ];
 
   const dashboardUrl = process.env.DASHBOARD_URL;
   if (dashboardUrl) {
     allowedOrigins.push(dashboardUrl);
-    // Also allow preview deployments on Vercel (e.g. sinper-dashboard-abc123.vercel.app)
-    try {
-      const host = new URL(dashboardUrl).hostname;
-      const baseDomain = host.split('.').slice(-2).join('.');
-      if (baseDomain === 'vercel.app') {
-        // Allow all *.vercel.app subdomains for this project (Vercel preview URLs)
-        allowedOrigins.push(/\.vercel\.app$/ as any);
-      }
-    } catch {}
   }
 
   return {
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      // Allow requests with no origin (e.g. same-host, curl, mobile apps)
       if (!origin) return callback(null, true);
 
       const allowed = allowedOrigins.some(o =>
