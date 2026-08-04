@@ -350,6 +350,15 @@ export class ExitManager {
     this.poolMissCount.delete(mint);
   }
 
+  async forceExit(mint: string): Promise<boolean> {
+    const pos = this.positions.get(mint);
+    if (!pos) return false;
+    logger.info({ mint }, '✋ Manual emergency exit requested via API');
+    this.cleanupPosition(mint);
+    await this.executeExit(pos, 'manual');
+    return true;
+  }
+
   stopAll(): void {
     for (const [, interval] of this.activeMonitors) {
       clearInterval(interval);

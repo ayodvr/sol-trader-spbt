@@ -177,6 +177,13 @@ async function main() {
         activeWatcher.stop();
       }
     },
+    forceExit: async (mint: string) => {
+      for (const em of exitManagers) {
+        const res = await em.forceExit(mint);
+        if (res) return true;
+      }
+      return false;
+    },
     updateConfig: (updates: Record<string, string>) => {
       let modeChanged = false;
 

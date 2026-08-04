@@ -20,6 +20,7 @@ export interface BotState {
 export interface BotControls {
   start: () => void;
   stop: () => void;
+  forceExit?: (mint: string) => Promise<boolean>;
   updateConfig: (updates: Record<string, string>) => void;
 }
 
@@ -187,6 +188,23 @@ export function startApi(state: BotState, controls: BotControls) {
       res.json({ success: true, message: 'Bot stopped' });
     } else {
       res.status(400).json({ error: 'Invalid action. Use "start" or "stop".' });
+    }
+  });
+
+  // Emergency exit single active position
+  app.post('/exit-position', authMiddleware, async (req, res) => {
+    try {
+      const { mint } = req.body;
+      if (!mint) return res.status(400).json({ error: 'Mint address required' });
+      if (controls.forceExit) {
+        const success = await controls.forceExit(mint);
+        broadcastUpdate();
+        return res.json({ success, message: success ? 'Manual exit triggered' : 'Position not found' });
+      }
+      return res.status(500).json({ error: 'Emergency exit not supported' });
+    } catch (err: any) {
+      logger.error({ err: err.message }, 'Failed manual exit');
+      res.status(500).json({ error: 'Failed to execute manual exit' });
     }
   });
 
