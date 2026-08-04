@@ -3,6 +3,7 @@ import cors from 'cors';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
+import { CONFIG } from '../config.js';
 
 const logger = pino({ name: 'api' });
 
@@ -198,15 +199,43 @@ export function startApi(state: BotState, controls: BotControls) {
     }
   });
 
-  // Update .env configuration
-  app.post('/config', authMiddleware, (req, res) => {
+  // GET current configuration for dashboard modal
+  app.get(['/config', '/settings'], authMiddleware, (req, res) => {
+    res.json({
+      PAPER_TRADING: CONFIG.DRY_RUN ? 'true' : 'false',
+      PAPER_BALANCE_SOL: '1.0',
+      TRADE_SIZE_SOL: (CONFIG.SNIPE_AMOUNT_LAMPORTS / 1_000_000_000).toString(),
+      MAX_OPEN_POSITIONS: '5',
+      TAKE_PROFIT_MULTIPLIER: (CONFIG.EXIT_PROFIT_PERCENT / 100).toString(),
+      STOP_LOSS_PERCENT: CONFIG.EXIT_DRAWDOWN_PERCENT.toString(),
+      TRAILING_STOP_PERCENT: CONFIG.TRAILING_STOP_PERCENT.toString(),
+      SIGNAL_SCORE_THRESHOLD: '30',
+      VOLUME_SPIKE_MULTIPLIER: '1.5',
+      AI_SCORE_THRESHOLD: '70',
+      MIN_LP_BURNED_PERCENT: '80',
+      REJECT_HONEYPOT: 'true',
+      REJECT_MINTABLE: 'true',
+    });
+  });
+
+  // Update .env configuration & live in-memory config
+  app.post(['/config', '/settings'], authMiddleware, (req, res) => {
     try {
       const updates = req.body;
       const envPath = path.resolve(process.cwd(), '.env');
 
       let envContent = fs.readFileSync(envPath, 'utf8');
 
-      for (const [key, value] of Object.entries(updates)) {
+      // Map frontend field names to .env key names if needed
+      const envUpdates: Record<string, string> = { ...updates };
+      if (updates.PAPER_TRADING !== undefined) envUpdates.DRY_RUN = updates.PAPER_TRADING;
+      if (updates.TRADE_SIZE_SOL) envUpdates.SNIPE_AMOUNT_SOL = updates.TRADE_SIZE_SOL;
+      if (updates.TAKE_PROFIT_MULTIPLIER) {
+        envUpdates.EXIT_PROFIT_PERCENT = Math.floor(parseFloat(updates.TAKE_PROFIT_MULTIPLIER) * 100).toString();
+      }
+      if (updates.STOP_LOSS_PERCENT) envUpdates.EXIT_DRAWDOWN_PERCENT = updates.STOP_LOSS_PERCENT;
+
+      for (const [key, value] of Object.entries(envUpdates)) {
         const regex = new RegExp(`^${key}=.*$`, 'm');
         if (envContent.match(regex)) {
           envContent = envContent.replace(regex, `${key}=${value}`);

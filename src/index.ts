@@ -180,8 +180,10 @@ async function main() {
     updateConfig: (updates: Record<string, string>) => {
       let modeChanged = false;
 
-      if (updates.DRY_RUN !== undefined) {
-        const isDryRun = updates.DRY_RUN === 'true';
+      // Handle DRY_RUN or PAPER_TRADING
+      const rawMode = updates.DRY_RUN ?? updates.PAPER_TRADING;
+      if (rawMode !== undefined) {
+        const isDryRun = rawMode === 'true';
         if (CONFIG.DRY_RUN !== isDryRun) {
           CONFIG.DRY_RUN = isDryRun;
           modeChanged = true;
@@ -189,14 +191,32 @@ async function main() {
         }
       }
 
-      if (updates.SNIPE_AMOUNT_SOL) {
-        CONFIG.SNIPE_AMOUNT_LAMPORTS = Math.floor(parseFloat(updates.SNIPE_AMOUNT_SOL) * 1_000_000_000);
+      // Handle Trade Size
+      const rawSize = updates.SNIPE_AMOUNT_SOL ?? updates.TRADE_SIZE_SOL;
+      if (rawSize) {
+        CONFIG.SNIPE_AMOUNT_LAMPORTS = Math.floor(parseFloat(rawSize) * 1_000_000_000);
+        logger.info(`Updated trade size to ${rawSize} SOL`);
       }
+
+      // Handle Take Profit
       if (updates.EXIT_PROFIT_PERCENT) {
         CONFIG.EXIT_PROFIT_PERCENT = parseInt(updates.EXIT_PROFIT_PERCENT);
+      } else if (updates.TAKE_PROFIT_MULTIPLIER) {
+        CONFIG.EXIT_PROFIT_PERCENT = Math.floor(parseFloat(updates.TAKE_PROFIT_MULTIPLIER) * 100);
+        logger.info(`Updated Take Profit target to ${CONFIG.EXIT_PROFIT_PERCENT}% (${updates.TAKE_PROFIT_MULTIPLIER}x)`);
       }
-      if (updates.EXIT_DRAWDOWN_PERCENT) {
-        CONFIG.EXIT_DRAWDOWN_PERCENT = parseInt(updates.EXIT_DRAWDOWN_PERCENT);
+
+      // Handle Stop Loss
+      const rawStop = updates.EXIT_DRAWDOWN_PERCENT ?? updates.STOP_LOSS_PERCENT;
+      if (rawStop) {
+        CONFIG.EXIT_DRAWDOWN_PERCENT = parseInt(rawStop);
+        logger.info(`Updated Stop Loss to ${CONFIG.EXIT_DRAWDOWN_PERCENT}%`);
+      }
+
+      // Handle Trailing Stop
+      if (updates.TRAILING_STOP_PERCENT) {
+        CONFIG.TRAILING_STOP_PERCENT = parseInt(updates.TRAILING_STOP_PERCENT);
+        logger.info(`Updated Trailing Stop to ${CONFIG.TRAILING_STOP_PERCENT}%`);
       }
 
       if (modeChanged) {
