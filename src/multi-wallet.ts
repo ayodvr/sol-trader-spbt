@@ -179,8 +179,9 @@ export class WalletManager {
 
         if (wallet.balance > sweepThreshold) {
           const amountToSweep = wallet.balance - keepAmount;
-          const targetPubkey = CONFIG.COLD_STORAGE_WALLET
-            ? new PublicKey(CONFIG.COLD_STORAGE_WALLET)
+          const targetStr = CONFIG.COLD_STORAGE_WALLET ? CONFIG.COLD_STORAGE_WALLET.trim() : '';
+          const targetPubkey = targetStr
+            ? new PublicKey(targetStr)
             : masterKeypair.publicKey;
 
           logger.info({

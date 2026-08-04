@@ -369,14 +369,17 @@ export class ExitManager {
   }
 
   private async sweepProfits(): Promise<void> {
+    if (CONFIG.DRY_RUN) return; // Skip in paper trading mode
     try {
       const balance = await this.connection.getBalance(this.wallet.publicKey);
       const thresholdLamports = 0.3 * LAMPORTS_PER_SOL;
+      const minSweepThreshold = 0.01 * LAMPORTS_PER_SOL;
 
-      if (balance > thresholdLamports) {
+      if (balance > thresholdLamports + minSweepThreshold) {
         const sweepAmount = balance - thresholdLamports;
-        const targetPubKey = CONFIG.COLD_STORAGE_WALLET
-          ? new PublicKey(CONFIG.COLD_STORAGE_WALLET)
+        const targetStr = CONFIG.COLD_STORAGE_WALLET ? CONFIG.COLD_STORAGE_WALLET.trim() : '';
+        const targetPubKey = targetStr
+          ? new PublicKey(targetStr)
           : Keypair.fromSecretKey(decodePrivateKey(CONFIG.PRIVATE_KEY)).publicKey;
 
         const tx = new Transaction().add(
@@ -395,9 +398,10 @@ export class ExitManager {
 
         logger.info({
           wallet: this.wallet.publicKey.toBase58().slice(0, 8) + '...',
+          destination: targetPubKey.toBase58().slice(0, 8) + '...',
           swept: (sweepAmount / LAMPORTS_PER_SOL).toFixed(4) + ' SOL',
           txid
-        }, '🧹 Swept excess profits to Master Wallet');
+        }, '🧹 Swept excess profits to vault');
       }
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed to sweep profits');
