@@ -179,16 +179,21 @@ export class WalletManager {
 
         if (wallet.balance > sweepThreshold) {
           const amountToSweep = wallet.balance - keepAmount;
+          const targetPubkey = CONFIG.COLD_STORAGE_WALLET
+            ? new PublicKey(CONFIG.COLD_STORAGE_WALLET)
+            : masterKeypair.publicKey;
+
           logger.info({
             wallet: wallet.address.slice(0, 8) + '...',
+            destination: targetPubkey.toBase58().slice(0, 8) + '...',
             balance: `${wallet.balance.toFixed(4)} SOL`,
             sweeping: `${amountToSweep.toFixed(4)} SOL`,
-          }, 'Sweeping profits back to master wallet');
+          }, 'Sweeping profits');
 
           const tx = new Transaction().add(
             SystemProgram.transfer({
               fromPubkey: wallet.keypair.publicKey,
-              toPubkey: masterKeypair.publicKey,
+              toPubkey: targetPubkey,
               lamports: Math.floor(amountToSweep * LAMPORTS_PER_SOL),
             })
           );

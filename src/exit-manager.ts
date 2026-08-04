@@ -366,13 +366,14 @@ export class ExitManager {
 
       if (balance > thresholdLamports) {
         const sweepAmount = balance - thresholdLamports;
-        const masterKeypair = Keypair.fromSecretKey(decodePrivateKey(CONFIG.PRIVATE_KEY));
-        const masterPubKey = masterKeypair.publicKey;
+        const targetPubKey = CONFIG.COLD_STORAGE_WALLET
+          ? new PublicKey(CONFIG.COLD_STORAGE_WALLET)
+          : Keypair.fromSecretKey(decodePrivateKey(CONFIG.PRIVATE_KEY)).publicKey;
 
         const tx = new Transaction().add(
           SystemProgram.transfer({
             fromPubkey: this.wallet.publicKey,
-            toPubkey: masterPubKey,
+            toPubkey: targetPubKey,
             lamports: sweepAmount,
           })
         );

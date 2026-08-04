@@ -5,6 +5,7 @@ dotenv.config();
 export const CONFIG = {
   // Wallet
   PRIVATE_KEY: process.env.PRIVATE_KEY!,
+  COLD_STORAGE_WALLET: process.env.COLD_STORAGE_WALLET || '',
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
 
   // Dry run mode (simulate trades without spending SOL)
