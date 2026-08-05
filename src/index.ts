@@ -375,10 +375,7 @@ async function main() {
     // These are useless for sniping and burn RPC rate limit quota.
     const baseMintStr = poolInfo.baseMint.toBase58();
     const WSOL = 'So11111111111111111111111111111111111111112';
-    // NOTE: Only skip WSOL itself — do NOT filter by 'pump' suffix.
-    // Pump.fun AMM graduated tokens do NOT always end in 'pump'.
-    // The old regex (/pump$/i) was blocking 100% of live AMM pools.
-    if (baseMintStr === WSOL) return;
+    if (baseMintStr === WSOL || !/pump$/i.test(baseMintStr)) return;
 
     logger.info({ baseMint: baseMintStr, pool: poolKey }, '🆕 New AMM pool');
 

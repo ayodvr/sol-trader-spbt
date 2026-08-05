@@ -357,7 +357,12 @@ export class WalletManager {
     const wallet = this.wallets.find(w => w.address === publicKey.toBase58());
     if (wallet) {
       wallet.balance += lamports / LAMPORTS_PER_SOL;
-      logger.info({ wallet: wallet.address.slice(0, 8) + '...', amount: (lamports / LAMPORTS_PER_SOL).toFixed(4) }, 'Updated virtual balance');
+      // Floor at 0 — paper balances can't go negative
+      if (wallet.balance < 0) {
+        logger.warn({ wallet: wallet.address.slice(0, 8) + '...' }, '⚠️ Virtual balance went negative — resetting to paper starting amount');
+        wallet.balance = 0.3333; // Refill to starting paper amount so testing continues
+      }
+      logger.info({ wallet: wallet.address.slice(0, 8) + '...', balance: wallet.balance.toFixed(4), amount: (lamports / LAMPORTS_PER_SOL).toFixed(4) }, 'Updated virtual balance');
     }
   }
 
