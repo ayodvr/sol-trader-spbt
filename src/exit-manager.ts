@@ -297,20 +297,8 @@ export class ExitManager {
         // Rugged position: liquidity was drained by dev = 0 SOL returned
         realSolReturned = 0;
       } else {
-        // Wait 1.5s for Solana RPC indexer to process post-tx balance update
-        await new Promise(r => setTimeout(r, 1500));
-        const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
-        const netSolDiff = (balAfter - balBefore) / 1_000_000_000;
-        
-        // Strictly measure actual SOL returned on-chain
-        if (netSolDiff > 0) {
-          realSolReturned = netSolDiff;
-        } else if (result.solReceived && result.solReceived > 0 && result.solReceived <= (entrySol * 3)) {
-          realSolReturned = result.solReceived;
-        } else {
-          // If transaction produced 0 or negative balance diff (e.g. fees), set realSolReturned to 0
-          realSolReturned = 0;
-        }
+        // Use exact WSOL/SOL output returned by PumpSwap AMM swap
+        realSolReturned = result.solReceived || 0;
       }
 
       const pnlSol = realSolReturned - entrySol;
