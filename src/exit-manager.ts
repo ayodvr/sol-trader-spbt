@@ -261,6 +261,8 @@ export class ExitManager {
 
     let result: { success: boolean; txHash?: string; error?: string };
 
+    const balBefore = await this.connection.getBalance(this.wallet.publicKey).catch(() => 0);
+
     if (pos.source === 'amm' && pos.poolInfo) {
       // ─── AMM sell via pumpswap.ts ───
       result = await ammSell(
@@ -288,32 +290,29 @@ export class ExitManager {
     }
 
     if (result.success) {
-      let actualSolReturned = pos.amountInLamports / 1_000_000_000;
-      if (priceChange !== undefined) {
-        actualSolReturned = actualSolReturned * (1 + (priceChange / 100));
-      }
+      const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
+      const realSolReturned = Math.max(0, (balAfter - balBefore) / 1_000_000_000);
+      const entrySol = pos.amountInLamports / 1_000_000_000;
+      const pnlSol = realSolReturned > 0 ? (realSolReturned - entrySol) : 0;
+      const profitPercentNum = entrySol > 0 ? ((realSolReturned - entrySol) / entrySol) * 100 : 0;
+      const profitStr = `${profitPercentNum >= 0 ? '+' : ''}${profitPercentNum.toFixed(1)}%`;
+      const solReturnedStr = realSolReturned.toFixed(4);
 
-      const solReturned = actualSolReturned.toFixed(4);
-      const profitStr = priceChange !== undefined
-        ? `${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(1)}%`
-        : 'N/A';
-
-      logger.info({ mint: pos.mint, reason, pnl: profitStr, bundleId: result.txHash }, '✅ Exit executed successfully');
+      logger.info({ mint: pos.mint, reason, pnl: profitStr, realSolReturned: solReturnedStr, bundleId: result.txHash }, '✅ Exit executed successfully');
 
       this.telegram?.onExit({
         mint: pos.mint,
         reason,
         profitPercent: profitStr,
-        solReturned,
+        solReturned: solReturnedStr,
         bundleId: result.txHash,
       });
 
       if (this.onExitSuccess) {
-        const pnlSol = (parseFloat(solReturned) - (pos.amountInLamports / 1_000_000_000));
         this.onExitSuccess(pnlSol, {
           mint: pos.mint,
-          boughtAt: pos.amountInLamports / 1_000_000_000,
-          soldAt: parseFloat(solReturned),
+          boughtAt: entrySol,
+          soldAt: realSolReturned,
           pnlSol,
           pnlPercent: profitStr,
           reason,
