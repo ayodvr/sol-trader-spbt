@@ -4,6 +4,7 @@ import {
   Transaction,
   Keypair,
   ComputeBudgetProgram,
+  TransactionInstruction,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddress,
@@ -128,7 +129,7 @@ async function buildBuyInstruction(
 
   const buyData = buildJsBuyData(estimatedTokens, maxSolCost);
 
-  const instruction = {
+  const instruction = new TransactionInstruction({
     programId: CONFIG.PUMP_PROGRAM_ID,
     keys: [
       { pubkey: CONFIG.GLOBAL_ACCOUNT, isSigner: false, isWritable: true },
@@ -145,7 +146,7 @@ async function buildBuyInstruction(
       { pubkey: CONFIG.PUMP_PROGRAM_ID, isSigner: false, isWritable: false },
     ],
     data: buyData,
-  };
+  });
 
   return { instruction, estimatedTokens, userTokenAccount, bondingCurveData };
 }
@@ -226,7 +227,7 @@ export async function nativeSnipe(
 
         if (deserialized) {
           // Reconstruct from JSON
-          const ix = {
+          const ix = new TransactionInstruction({
             programId: new PublicKey(deserialized.program_id),
             keys: deserialized.accounts.map((a: any) => ({
               pubkey: new PublicKey(a.pubkey),
@@ -234,18 +235,18 @@ export async function nativeSnipe(
               isWritable: a.is_writable,
             })),
             data: Buffer.from(deserialized.data_hex, 'hex'),
-          };
+          });
           tx.add(ix);
         } else {
           // debugDeserializeInstruction not available — fall back to JS builder
           // to avoid submitting an empty tx that Jito rejects with 400
           logger.warn({ mint: mint.toBase58() }, '⚠️ Native deserialization unavailable — using JS builder fallback');
           const jsFallback = await buildBuyInstruction(connection, mint, wallet.publicKey, bondingCurve, solAmountLamports, tokenProgramId);
-          tx.add(jsFallback.instruction as any);
+          tx.add(new TransactionInstruction(jsFallback.instruction as any));
         }
       } else {
-        // JS: instruction is a plain object
-        tx.add(instruction as any);
+        // JS: wrap instruction as TransactionInstruction
+        tx.add(new TransactionInstruction(instruction as any));
       }
 
       tx.feePayer = wallet.publicKey;
