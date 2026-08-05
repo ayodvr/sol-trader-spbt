@@ -301,11 +301,13 @@ export class ExitManager {
       const profitStr = `${profitPercentNum >= 0 ? '+' : ''}${profitPercentNum.toFixed(1)}%`;
       const solReturnedStr = realSolReturned.toFixed(6);
 
-      logger.info({ mint: pos.mint, reason, pnl: profitStr, realSolReturned: solReturnedStr, bundleId: result.txHash }, '✅ Exit executed successfully');
+      const actualReason = (pnlSol <= 0 && reason === 'take_profit') ? 'stop_loss' : reason;
+
+      logger.info({ mint: pos.mint, reason: actualReason, pnl: profitStr, realSolReturned: solReturnedStr, bundleId: result.txHash }, '✅ Exit executed successfully');
 
       this.telegram?.onExit({
         mint: pos.mint,
-        reason,
+        reason: actualReason,
         profitPercent: profitStr,
         solReturned: solReturnedStr,
         bundleId: result.txHash,
@@ -318,7 +320,7 @@ export class ExitManager {
           soldAt: realSolReturned,
           pnlSol,
           pnlPercent: profitStr,
-          reason,
+          reason: actualReason,
           timestamp: Date.now()
         });
       }
