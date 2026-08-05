@@ -52,7 +52,7 @@ const customLogger = {
 const logger = pino({ name: 'main' }, customLogger);
 const MASTER_WALLET_PATH = './wallets.json';
 const USE_GRPC = !!(process.env.GRPC_ENDPOINT && process.env.GRPC_TOKEN);
-const USE_TRITON_V5 = process.env.GRPC_USE_TRITON_V5 !== 'false'; // Default to true whenever GRPC credentials exist
+const USE_TRITON_V5 = process.env.GRPC_USE_TRITON_V5 === 'true'; // Opt-in for Triton v5 NaaE; Alchemy uses standard GrpcWatcher
 
 async function main() {
   console.log(`
