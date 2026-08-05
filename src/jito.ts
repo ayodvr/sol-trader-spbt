@@ -170,34 +170,38 @@ export async function waitForBundleConfirmation(
   }
 
   for (let i = 0; i < maxRetries; i++) {
-    try {
-      const response = await axios.post(
-        `${CONFIG.JITO_BLOCK_ENGINE}/api/v1/bundles`,
-        {
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getBundleStatuses',
-          params: [[bundleId]],
-        },
-        { timeout: 5_000 }
-      );
+    for (const endpoint of JITO_ENDPOINTS) {
+      try {
+        const response = await axios.post(
+          `${endpoint}/api/v1/bundles`,
+          {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'getBundleStatuses',
+            params: [[bundleId]],
+          },
+          { timeout: 3_000 }
+        );
 
-      const val = response.data?.result?.value?.[0];
-      const statusStr = (val?.status || '').toLowerCase();
-      const confStatus = (val?.confirmation_status || '').toLowerCase();
+        const val = response.data?.result?.value?.[0];
+        if (val) {
+          const statusStr = (val.status || '').toLowerCase();
+          const confStatus = (val.confirmation_status || '').toLowerCase();
 
-      if (
-        statusStr === 'landed' ||
-        statusStr === 'confirmed' ||
-        statusStr === 'finalized' ||
-        confStatus === 'confirmed' ||
-        confStatus === 'finalized'
-      ) {
-        return 'confirmed';
+          if (
+            statusStr === 'landed' ||
+            statusStr === 'confirmed' ||
+            statusStr === 'finalized' ||
+            confStatus === 'confirmed' ||
+            confStatus === 'finalized'
+          ) {
+            return 'confirmed';
+          }
+          if (statusStr === 'failed') return 'failed';
+        }
+      } catch {
+        // Transient error on this endpoint — check next region
       }
-      if (statusStr === 'failed') return 'failed';
-    } catch {
-      // Transient — keep polling
     }
     await new Promise(r => setTimeout(r, delayMs));
   }
