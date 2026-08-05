@@ -243,7 +243,7 @@ export class ExitManager {
     logger.info({ mint: pos.mint, reason, source: pos.source, balance: pos.tokenBalance.toString() }, '🔄 Executing exit...');
 
     const mintPubkey = new PublicKey(pos.mint);
-    const isEmergency = reason === 'rug_detected' || reason === 'stop_loss';
+    const isEmergency = reason === 'rug_detected';
     const tokenProgramId = pos.tokenProgram ? new PublicKey(pos.tokenProgram) : TOKEN_PROGRAM_ID;
 
     // Refetch live on-chain token balance if stored balance is 0
