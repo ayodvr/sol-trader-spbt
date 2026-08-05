@@ -1,7 +1,7 @@
 import {
   Connection, PublicKey, Keypair, SystemProgram, Transaction, LAMPORTS_PER_SOL
 } from '@solana/web3.js';
-import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from '@solana/spl-token';
 import { CONFIG } from '../config.js';
 import { sell } from './sell.js';
 import { ammSell, fetchAmmPool } from './pumpswap.js';
@@ -245,6 +245,19 @@ export class ExitManager {
     const mintPubkey = new PublicKey(pos.mint);
     const isEmergency = reason === 'rug_detected' || reason === 'stop_loss';
     const tokenProgramId = pos.tokenProgram ? new PublicKey(pos.tokenProgram) : TOKEN_PROGRAM_ID;
+
+    // Refetch live on-chain token balance if stored balance is 0
+    if (pos.tokenBalance <= 0n) {
+      try {
+        const ata = await getAssociatedTokenAddress(mintPubkey, this.wallet.publicKey, false, tokenProgramId);
+        const balInfo = await this.connection.getTokenAccountBalance(ata);
+        if (balInfo.value?.amount) {
+          pos.tokenBalance = BigInt(balInfo.value.amount);
+        }
+      } catch {
+        // ATA missing or 0 balance
+      }
+    }
 
     let result: { success: boolean; txHash?: string; error?: string };
 
