@@ -178,18 +178,30 @@ export function startApi(state: BotState, controls: BotControls) {
   });
 
   // Start / Stop the bot
-  app.post('/control', authMiddleware, (req, res) => {
+  app.post('/control', authMiddleware, async (req, res) => {
     const { action } = req.body;
-    if (action === 'start') {
-      controls.start();
-      broadcastUpdate(); // Push to SSE clients immediately
-      res.json({ success: true, message: 'Bot started' });
-    } else if (action === 'stop') {
-      controls.stop();
-      broadcastUpdate();
-      res.json({ success: true, message: 'Bot stopped' });
-    } else {
-      res.status(400).json({ error: 'Invalid action. Use "start" or "stop".' });
+    try {
+      if (action === 'start') {
+        controls.start();
+        broadcastUpdate(); // Push to SSE clients immediately
+        res.json({ success: true, message: 'Bot started' });
+      } else if (action === 'stop') {
+        controls.stop();
+        broadcastUpdate();
+        res.json({ success: true, message: 'Bot stopped' });
+      } else if (action === 'sweep') {
+        if (controls.sweepWallets) {
+          const result = await controls.sweepWallets();
+          broadcastUpdate();
+          return res.json(result);
+        }
+        return res.status(500).json({ error: 'Sweep function not supported' });
+      } else {
+        res.status(400).json({ error: 'Invalid action. Use "start", "stop", or "sweep".' });
+      }
+    } catch (err: any) {
+      logger.error({ err: err.message }, `Failed /control action ${action}`);
+      res.status(500).json({ error: err.message || 'Internal server error' });
     }
   });
 
