@@ -39,7 +39,7 @@ export const CONFIG = {
   BIRDEYE_API_KEY: process.env.BIRDEYE_API_KEY || '', // Legacy — kept for compatibility
 
   // Exit triggers
-  EXIT_PROFIT_PERCENT: parseInt(process.env.EXIT_PROFIT_PERCENT || '300'),
+  EXIT_PROFIT_PERCENT: parseInt(process.env.EXIT_PROFIT_PERCENT || '100'), // Take profit at +100% (2x) for faster capital recycling
   EXIT_DRAWDOWN_PERCENT: parseInt(process.env.EXIT_DRAWDOWN_PERCENT || '30'),
   TRAILING_STOP_PERCENT: parseInt(process.env.TRAILING_STOP_PERCENT || '15'), // % drop from peak to trigger trailing stop
 

@@ -62,8 +62,8 @@ export class ExitManager {
     logger.info({ mint, entryPrice: entryPrice.toFixed(2), source }, '🎯 Position tracked, exit monitor active');
   }
 
-  // How often to poll price: 10s in dry-run (saves RPC), 3s in live
-  private readonly POLL_INTERVAL_MS = CONFIG.DRY_RUN ? 10_000 : 3_000;
+  // How often to poll price: 10s in dry-run, 1s in live for ultra-fast exits
+  private readonly POLL_INTERVAL_MS = CONFIG.DRY_RUN ? 10_000 : 1_000;
   // How many consecutive "pool not found" ticks before force-closing a stuck position
   private poolMissCount: Map<string, number> = new Map();
 
