@@ -311,6 +311,13 @@ export class WalletManager {
       return;
     }
 
+    if (this.masterKeypair) {
+      try {
+        const mBal = await this.connection.getBalance(this.masterKeypair.publicKey);
+        this.masterBalance = mBal / LAMPORTS_PER_SOL;
+      } catch {}
+    }
+
     for (const wallet of this.wallets) {
       try {
         const balance = await this.connection.getBalance(wallet.keypair.publicKey);
@@ -333,7 +340,7 @@ export class WalletManager {
       masterBalance: `${this.masterBalance.toFixed(4)} SOL`,
       totalWallets: this.wallets.length,
       availableWallets: this.wallets.filter(w => !w.inUse).length,
-      totalBalance: this.wallets.reduce((s, w) => s + w.balance, 0),
+      totalBalance: this.masterBalance + this.wallets.reduce((s, w) => s + w.balance, 0),
       totalSnipes: this.wallets.reduce((s, w) => s + w.totalSnipes, 0),
       wallets: this.wallets.map(w => ({
         address: w.address.slice(0, 8) + '...',
