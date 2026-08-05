@@ -259,7 +259,7 @@ export class ExitManager {
       }
     }
 
-    let result: { success: boolean; txHash?: string; error?: string };
+    let result: { success: boolean; txHash?: string; bundleId?: string; solReceived?: number; error?: string };
 
     const balBefore = await this.connection.getBalance(this.wallet.publicKey).catch(() => 0);
 
@@ -290,13 +290,16 @@ export class ExitManager {
     }
 
     if (result.success) {
-      const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
-      const realSolReturned = Math.max(0, (balAfter - balBefore) / 1_000_000_000);
+      let realSolReturned = result.solReceived || 0;
+      if (realSolReturned <= 0) {
+        const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
+        realSolReturned = Math.max(0, (balAfter - balBefore) / 1_000_000_000);
+      }
       const entrySol = pos.amountInLamports / 1_000_000_000;
-      const pnlSol = realSolReturned > 0 ? (realSolReturned - entrySol) : 0;
+      const pnlSol = realSolReturned - entrySol;
       const profitPercentNum = entrySol > 0 ? ((realSolReturned - entrySol) / entrySol) * 100 : 0;
       const profitStr = `${profitPercentNum >= 0 ? '+' : ''}${profitPercentNum.toFixed(1)}%`;
-      const solReturnedStr = realSolReturned.toFixed(4);
+      const solReturnedStr = realSolReturned.toFixed(6);
 
       logger.info({ mint: pos.mint, reason, pnl: profitStr, realSolReturned: solReturnedStr, bundleId: result.txHash }, '✅ Exit executed successfully');
 

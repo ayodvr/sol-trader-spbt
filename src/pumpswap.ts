@@ -237,7 +237,7 @@ export async function ammSell(
   trackVolume: boolean = false,
   isEmergency: boolean = false,
   tokenProgramId: PublicKey = TOKEN_PROGRAM_ID, // Token-2022 or standard SPL
-): Promise<{ success: boolean; bundleId?: string; error?: string }> {
+): Promise<{ success: boolean; bundleId?: string; solReceived?: number; error?: string }> {
   try {
     if (baseAmountIn <= 0n) {
       return { success: false, error: 'Token balance is 0 — nothing to sell' };
@@ -297,7 +297,7 @@ export async function ammSell(
     const status = await waitForBundleConfirmation(bundleId, 30, 500, connection);
     if (status === 'confirmed') {
       logger.info({ bundleId }, '✅ AMM Sell confirmed');
-      return { success: true, bundleId };
+      return { success: true, bundleId, solReceived: Number(rawQuoteOut) / 1_000_000_000 };
     }
     return { success: false, error: `AMM sell status: ${status}` };
 
