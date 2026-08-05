@@ -92,38 +92,51 @@ async function executeSubmitJitoBundle(
     }
     lastJitoSubmitTime = Date.now();
 
-    const targetEndpoint = getJitoEndpoint();
+    // Try up to 3 regional endpoints if one fails or rate-limits
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const targetEndpoint = getJitoEndpoint();
 
-    logger.info({
-      bundleSize: serializedTxs.length,
-      tip: `${(tipLamports / 1_000_000_000).toFixed(4)} SOL`,
-      endpoint: targetEndpoint,
-    }, 'Submitting Jito bundle');
+      try {
+        logger.info({
+          bundleSize: serializedTxs.length,
+          tip: `${(tipLamports / 1_000_000_000).toFixed(4)} SOL`,
+          endpoint: targetEndpoint,
+          attempt: attempt + 1,
+        }, 'Submitting Jito bundle');
 
-    const response = await axios.post(
-      `${targetEndpoint}/api/v1/bundles`,
-      {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'sendBundle',
-        params: [serializedTxs],
-      },
-      {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 15_000,
+        const response = await axios.post(
+          `${targetEndpoint}/api/v1/bundles`,
+          {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'sendBundle',
+            params: [serializedTxs],
+          },
+          {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 10_000,
+          }
+        );
+
+        const bundleId = response.data?.result;
+        if (bundleId) {
+          logger.info({ bundleId, endpoint: targetEndpoint }, '✅ Bundle submitted');
+          return bundleId;
+        }
+
+        logger.warn({ response: response.data, endpoint: targetEndpoint }, 'Jito endpoint returned non-bundle result — retrying next region');
+      } catch (err: any) {
+        logger.warn({ err: err.message, response: err.response?.data, endpoint: targetEndpoint }, 'Jito endpoint error — retrying next region');
       }
-    );
 
-    const bundleId = response.data?.result;
-    if (bundleId) {
-      logger.info({ bundleId }, '✅ Bundle submitted');
-      return bundleId;
+      // Brief 200ms delay between fallback endpoints
+      await new Promise(r => setTimeout(r, 200));
     }
 
-    logger.error({ response: response.data }, '❌ Bundle submission failed');
+    logger.error('❌ All Jito regional bundle submission attempts failed');
     return null;
   } catch (err: any) {
-    logger.error({ err: err.message, response: err.response?.data }, 'Jito bundle error');
+    logger.error({ err: err.message }, 'Jito bundle serialization error');
     return null;
   }
 }
