@@ -147,34 +147,46 @@ export class WalletManager {
     }
   }
 
-  async refillWallets(masterKeypair: Keypair, refillThreshold: number = 0.3, refillAmount: number = 0.08): Promise<void> {
+  async refillWallets(masterKeypair: Keypair, refillThreshold: number = 0.1, refillAmount: number = 0.05): Promise<void> {
     if (CONFIG.DRY_RUN) return; // Skip refill in dry run
     
     const masterBalance = await this.connection.getBalance(masterKeypair.publicKey);
     this.masterBalance = masterBalance / LAMPORTS_PER_SOL;
-    
-    logger.info({
-      master: masterKeypair.publicKey.toBase58().slice(0, 8) + '...',
-      balance: `${this.masterBalance.toFixed(2)} SOL`,
-    }, 'Checking wallet balances for refill');
 
+    // Refresh sub-wallet balances
     for (const wallet of this.wallets) {
       try {
-        const balance = await this.connection.getBalance(wallet.keypair.publicKey);
-        wallet.balance = balance / LAMPORTS_PER_SOL;
+        const b = await this.connection.getBalance(wallet.keypair.publicKey);
+        wallet.balance = b / LAMPORTS_PER_SOL;
+      } catch { }
+    }
 
-        if (wallet.balance < refillThreshold && masterBalance > refillAmount * LAMPORTS_PER_SOL) {
+    const totalSubSol = this.wallets.reduce((s, w) => s + w.balance, 0);
+    const totalSystemSol = this.masterBalance + totalSubSol;
+
+    logger.info({
+      master: `${this.masterBalance.toFixed(4)} SOL`,
+      subTotal: `${totalSubSol.toFixed(4)} SOL`,
+      totalSystem: `${totalSystemSol.toFixed(4)} SOL`,
+    }, 'Rebalancing sub-wallet funds equally');
+
+    // Case 1: Refill unfunded wallets from Master Vault if master has > 0.05 SOL
+    for (const wallet of this.wallets) {
+      if (wallet.balance < 0.15 && this.masterBalance > 0.08) {
+        const transferSol = Math.min(0.25, this.masterBalance - 0.05);
+        if (transferSol <= 0.02) continue;
+
+        try {
           logger.info({
             wallet: wallet.address.slice(0, 8) + '...',
-            balance: `${wallet.balance.toFixed(4)} SOL`,
-            refilling: `${refillAmount} SOL`,
-          }, 'Refilling wallet');
+            amount: `${transferSol.toFixed(4)} SOL`,
+          }, 'Funding sub-wallet from Master Vault');
 
           const tx = new Transaction().add(
             SystemProgram.transfer({
               fromPubkey: masterKeypair.publicKey,
               toPubkey: wallet.keypair.publicKey,
-              lamports: refillAmount * LAMPORTS_PER_SOL,
+              lamports: Math.floor(transferSol * LAMPORTS_PER_SOL),
             })
           );
           tx.feePayer = masterKeypair.publicKey;
@@ -184,11 +196,50 @@ export class WalletManager {
 
           const sig = await this.connection.sendRawTransaction(tx.serialize());
           await this.connection.confirmTransaction(sig, 'confirmed');
-          wallet.balance += refillAmount;
-          logger.info({ wallet: wallet.address.slice(0, 8) + '...', sig }, 'Refill complete');
+          wallet.balance += transferSol;
+          this.masterBalance -= transferSol;
+          logger.info({ wallet: wallet.address.slice(0, 8) + '...', sig }, 'Refill from Master Vault complete');
+        } catch (err: any) {
+          logger.error({ wallet: wallet.address.slice(0, 8) + '...', err: err.message }, 'Refill from Master Vault failed');
         }
-      } catch (err: any) {
-        logger.error({ wallet: wallet.address.slice(0, 8) + '...', err: err.message }, 'Refill failed');
+      }
+    }
+
+    // Case 2: If Sub-wallet 1 has high balance (> 0.4 SOL) while other sub-wallets are < 0.1 SOL, transfer directly from Sub-wallet 1 to unfunded sub-wallets
+    const flushSource = this.wallets.find(w => w.balance > 0.40 && !w.inUse);
+    if (flushSource) {
+      for (const targetWallet of this.wallets) {
+        if (targetWallet.address === flushSource.address) continue;
+        if (targetWallet.balance < 0.15 && flushSource.balance > 0.35) {
+          const share = 0.25;
+          try {
+            logger.info({
+              from: flushSource.address.slice(0, 8) + '...',
+              to: targetWallet.address.slice(0, 8) + '...',
+              amount: `${share} SOL`,
+            }, 'Equalizing funds between sub-wallets');
+
+            const tx = new Transaction().add(
+              SystemProgram.transfer({
+                fromPubkey: flushSource.keypair.publicKey,
+                toPubkey: targetWallet.keypair.publicKey,
+                lamports: Math.floor(share * LAMPORTS_PER_SOL),
+              })
+            );
+            tx.feePayer = flushSource.keypair.publicKey;
+            const { blockhash } = await this.connection.getLatestBlockhash();
+            tx.recentBlockhash = blockhash;
+            tx.sign(flushSource.keypair);
+
+            const sig = await this.connection.sendRawTransaction(tx.serialize());
+            await this.connection.confirmTransaction(sig, 'confirmed');
+            flushSource.balance -= share;
+            targetWallet.balance += share;
+            logger.info({ to: targetWallet.address.slice(0, 8) + '...', sig }, 'Fund equalization complete');
+          } catch (err: any) {
+            logger.error({ err: err.message }, 'Fund equalization failed');
+          }
+        }
       }
     }
   }
