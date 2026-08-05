@@ -27,11 +27,16 @@ export class WalletManager {
   private connection: Connection;
   private minWalletBalance: number;
   public masterBalance: number = 0;
+  private masterKeypair?: Keypair;
 
-  constructor(walletPath: string, minBalanceSol: number = 0.5) {
+  constructor(walletPath: string, minBalanceSol: number = 0.5, masterKeypair?: Keypair) {
     this.connection = new Connection(CONFIG.RPC_URL, 'confirmed');
     this.minWalletBalance = minBalanceSol;
+    try {
+      this.masterKeypair = masterKeypair || Keypair.fromSecretKey(decodePrivateKey(CONFIG.PRIVATE_KEY));
+    } catch { }
     this.loadWallets(walletPath);
+    this.refreshBalances();
   }
 
   private loadWallets(walletPath: string): void {
@@ -220,9 +225,14 @@ export class WalletManager {
       return; // Balances are mocked in dry run
     }
     
-    if (masterKeypair) {
-      const mb = await this.connection.getBalance(masterKeypair.publicKey);
-      this.masterBalance = mb / LAMPORTS_PER_SOL;
+    const keyToUse = masterKeypair || this.masterKeypair;
+    if (keyToUse) {
+      try {
+        const mb = await this.connection.getBalance(keyToUse.publicKey);
+        this.masterBalance = mb / LAMPORTS_PER_SOL;
+      } catch (err: any) {
+        logger.error({ err: err.message }, 'Failed to fetch master wallet balance');
+      }
     }
     
     for (const wallet of this.wallets) {
