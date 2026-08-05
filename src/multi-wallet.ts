@@ -292,21 +292,25 @@ export class WalletManager {
   }
 
   async refreshBalances(masterKeypair?: Keypair): Promise<void> {
-    if (CONFIG.DRY_RUN) {
-      this.masterBalance = 1000.0;
-      return; // Balances are mocked in dry run
-    }
-    
     const keyToUse = masterKeypair || this.masterKeypair;
+
+    // Always fetch the real on-chain master balance (even in dry-run),
+    // so the dashboard shows actual SOL — not a fake 1000 SOL placeholder.
     if (keyToUse) {
       try {
         const mb = await this.connection.getBalance(keyToUse.publicKey);
         this.masterBalance = mb / LAMPORTS_PER_SOL;
       } catch (err: any) {
         logger.error({ err: err.message }, 'Failed to fetch master wallet balance');
+        // Fallback: keep existing value rather than resetting to 0
       }
     }
-    
+
+    if (CONFIG.DRY_RUN) {
+      // Sub-wallet balances stay virtual in dry-run — don't overwrite them with on-chain values
+      return;
+    }
+
     for (const wallet of this.wallets) {
       try {
         const balance = await this.connection.getBalance(wallet.keypair.publicKey);
