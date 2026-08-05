@@ -291,10 +291,10 @@ export async function ammSell(
     tx.recentBlockhash = blockhash;
 
     const dynamicTipLamports = TipCalculator.calculateTip(0, isEmergency);
-    const bundleId = await submitJitoBundle([tx], [wallet], dynamicTipLamports);
+    const bundleId = await submitJitoBundle([tx], [wallet], dynamicTipLamports, connection);
     if (!bundleId) return { success: false, error: 'Failed to submit AMM sell bundle' };
 
-    const status = await waitForBundleConfirmation(bundleId, 30, 500);
+    const status = await waitForBundleConfirmation(bundleId, 30, 500, connection);
     if (status === 'confirmed') {
       logger.info({ bundleId }, '✅ AMM Sell confirmed');
       return { success: true, bundleId };

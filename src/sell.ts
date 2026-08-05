@@ -1,5 +1,5 @@
 import {
-  Connection, PublicKey, Transaction, Keypair, ComputeBudgetProgram,
+  Connection, PublicKey, Transaction, Keypair, ComputeBudgetProgram, TransactionInstruction,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddress,
@@ -158,11 +158,11 @@ export async function sell(
     // bonding_curve_v2 is ALWAYS the last account
     accounts.push({ pubkey: bondingCurveV2, isSigner: false, isWritable: false });
 
-    const sellIx = {
+    const sellIx = new TransactionInstruction({
       programId: CONFIG.PUMP_PROGRAM_ID,
       keys: accounts,
       data: sellData,
-    };
+    });
 
     const tx = new Transaction();
     tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 150_000 }));
@@ -173,10 +173,10 @@ export async function sell(
 
     // ─── Submit via Jito ───
     const tipLamports = TipCalculator.calculateTip(0, isEmergency);
-    const bundleId = await submitJitoBundle([tx], [wallet], tipLamports);
+    const bundleId = await submitJitoBundle([tx], [wallet], tipLamports, connection);
     if (!bundleId) throw new Error('Failed to get bundle ID from Jito');
 
-    const status = await waitForBundleConfirmation(bundleId, 30, 500);
+    const status = await waitForBundleConfirmation(bundleId, 30, 500, connection);
 
     if (status === 'confirmed') {
       logger.info({ bundleId, mint: mint.toBase58() }, '✅ Sell confirmed');
