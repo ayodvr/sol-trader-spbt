@@ -151,9 +151,13 @@ async function main() {
       if (Array.isArray(saved.history)) tradeHistory.push(...saved.history);
       if (saved.stats) {
         stats.successfulExits = saved.stats.successfulExits || 0;
-        stats.totalPnl = saved.stats.totalPnl || 0;
+        if (Array.isArray(saved.history)) {
+          stats.totalPnl = saved.history.reduce((sum: number, item: any) => sum + (typeof item.pnlSol === 'number' ? item.pnlSol : (parseFloat(item.pnlSol) || 0)), 0);
+        } else {
+          stats.totalPnl = 0;
+        }
       }
-      logger.info({ count: tradeHistory.length, totalPnl: stats.totalPnl }, 'Loaded trade history and stats from disk');
+      logger.info({ count: tradeHistory.length, totalPnl: stats.totalPnl.toFixed(4) }, 'Loaded trade history and stats from disk');
     }
   } catch {}
 
