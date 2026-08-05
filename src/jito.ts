@@ -4,6 +4,7 @@ import {
   SystemProgram,
   PublicKey,
 } from '@solana/web3.js';
+import bs58 from 'bs58';
 import axios from 'axios';
 import { CONFIG } from '../config.js';
 import pino from 'pino';
@@ -49,10 +50,10 @@ export async function submitJitoBundle(
     });
     transactions[transactions.length - 1].add(tipIx);
 
-    // Serialize all transactions to base64
+    // Serialize all transactions to base58 (required by Jito JSON-RPC API)
     const serializedTxs = transactions.map((tx) => {
       tx.sign(...signers);
-      return Buffer.from(tx.serialize()).toString('base64');
+      return bs58.encode(tx.serialize());
     });
 
     if (CONFIG.DRY_RUN) {
@@ -91,7 +92,7 @@ export async function submitJitoBundle(
     logger.error({ response: response.data }, '❌ Bundle submission failed');
     return null;
   } catch (err: any) {
-    logger.error({ err: err.message }, 'Jito bundle error');
+    logger.error({ err: err.message, response: err.response?.data }, 'Jito bundle error');
     return null;
   }
 }
