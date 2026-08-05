@@ -31,6 +31,26 @@ function getRandomTipAccount(): PublicKey {
   return new PublicKey(addr);
 }
 
+const JITO_ENDPOINTS = [
+  'https://mainnet.block-engine.jito.wtf',
+  'https://amsterdam.mainnet.block-engine.jito.wtf',
+  'https://frankfurt.mainnet.block-engine.jito.wtf',
+  'https://ny.mainnet.block-engine.jito.wtf',
+  'https://tokyo.mainnet.block-engine.jito.wtf',
+];
+
+let lastJitoSubmitTime = 0;
+let endpointIndex = 0;
+
+function getJitoEndpoint(): string {
+  if (CONFIG.JITO_BLOCK_ENGINE && CONFIG.JITO_BLOCK_ENGINE !== 'https://mainnet.block-engine.jito.wtf') {
+    return CONFIG.JITO_BLOCK_ENGINE;
+  }
+  const ep = JITO_ENDPOINTS[endpointIndex % JITO_ENDPOINTS.length];
+  endpointIndex++;
+  return ep;
+}
+
 /**
  * Submit a bundle of transactions to Jito's block engine.
  * All transactions execute atomically and in order.
@@ -64,13 +84,25 @@ export async function submitJitoBundle(
       return `dry_run_bundle_${Date.now()}`;
     }
 
+    // ─── Rate Limit Guard: Jito public API allows max 1 bundle request per second ───
+    const now = Date.now();
+    const timeSinceLast = now - lastJitoSubmitTime;
+    if (timeSinceLast < 1050) {
+      const waitMs = 1050 - timeSinceLast;
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+    lastJitoSubmitTime = Date.now();
+
+    const targetEndpoint = getJitoEndpoint();
+
     logger.info({
       bundleSize: serializedTxs.length,
       tip: `${(tipLamports / 1_000_000_000).toFixed(4)} SOL`,
+      endpoint: targetEndpoint,
     }, 'Submitting Jito bundle');
 
     const response = await axios.post(
-      `${CONFIG.JITO_BLOCK_ENGINE}/api/v1/bundles`,
+      `${targetEndpoint}/api/v1/bundles`,
       {
         jsonrpc: '2.0',
         id: 1,
