@@ -1,5 +1,5 @@
 import {
-  Connection, PublicKey, Transaction, Keypair, ComputeBudgetProgram,
+  Connection, PublicKey, Transaction, Keypair, ComputeBudgetProgram, TransactionInstruction,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddress,
@@ -202,7 +202,7 @@ export async function ammBuy(
     );
 
     const data = buildAmmBuyData(baseAmountOut, maxQuoteAmountIn, trackVolume);
-    const buyIx = { programId: PUMP_SWAP_PROGRAM, keys: accounts, data };
+    const buyIx = new TransactionInstruction({ programId: PUMP_SWAP_PROGRAM, keys: accounts, data });
 
     const tx = new Transaction();
     tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100_000 }));
@@ -278,7 +278,7 @@ export async function ammSell(
     );
 
     const data = buildAmmSellData(baseAmountIn, minQuoteOut, trackVolume);
-    const sellIx = { programId: PUMP_SWAP_PROGRAM, keys: accounts, data };
+    const sellIx = new TransactionInstruction({ programId: PUMP_SWAP_PROGRAM, keys: accounts, data });
 
     const tx = new Transaction();
     tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 150_000 }));

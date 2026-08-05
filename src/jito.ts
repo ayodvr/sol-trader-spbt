@@ -63,10 +63,12 @@ export async function submitJitoBundle(
 ): Promise<string | null> {
   try {
     // Add tip instruction to the last transaction
+    const safeTipLamports = Math.max(100_000, Math.floor(tipLamports || 100_000));
+    const tipAccount = getRandomTipAccount();
     const tipIx = SystemProgram.transfer({
       fromPubkey: signers[0].publicKey,
-      toPubkey: getRandomTipAccount(),
-      lamports: tipLamports,
+      toPubkey: tipAccount,
+      lamports: safeTipLamports,
     });
     transactions[transactions.length - 1].add(tipIx);
 
