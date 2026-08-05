@@ -3,7 +3,7 @@ import {
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddress,
-  createAssociatedTokenAccountInstruction,
+  createAssociatedTokenAccountIdempotentInstruction,
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
@@ -162,13 +162,12 @@ export async function ammBuy(
     const userBaseTokenAccount = await getAssociatedTokenAddress(poolInfo.baseMint, wallet.publicKey, false, tokenProgramId);
     const userQuoteTokenAccount = await getAssociatedTokenAddress(poolInfo.quoteMint, wallet.publicKey, false, TOKEN_PROGRAM_ID); // WSOL is always SPL
 
-    const ataIxs: any[] = [];
-    if (!await connection.getAccountInfo(userBaseTokenAccount)) {
-      ataIxs.push(createAssociatedTokenAccountInstruction(wallet.publicKey, userBaseTokenAccount, wallet.publicKey, poolInfo.baseMint, tokenProgramId));
-    }
-    if (!await connection.getAccountInfo(userQuoteTokenAccount)) {
-      ataIxs.push(createAssociatedTokenAccountInstruction(wallet.publicKey, userQuoteTokenAccount, wallet.publicKey, poolInfo.quoteMint, TOKEN_PROGRAM_ID));
-    }
+    // Idempotent ATA creation instructions (creates ATA if missing, succeeds silently if ATA exists)
+    // Eliminates RPC getAccountInfo calls to prevent 429 rate limits and accelerate execution speed
+    const ataIxs = [
+      createAssociatedTokenAccountIdempotentInstruction(wallet.publicKey, userBaseTokenAccount, wallet.publicKey, poolInfo.baseMint, tokenProgramId),
+      createAssociatedTokenAccountIdempotentInstruction(wallet.publicKey, userQuoteTokenAccount, wallet.publicKey, poolInfo.quoteMint, TOKEN_PROGRAM_ID),
+    ];
 
     const globalConfig = deriveAmmGlobalConfig();
     const eventAuthority = deriveAmmEventAuthority();
