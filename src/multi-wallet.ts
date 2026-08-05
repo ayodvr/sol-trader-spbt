@@ -85,15 +85,23 @@ export class WalletManager {
     }
   }
 
-  getNextWallet(): Keypair {
+  getNextWallet(minBalanceSol: number = 0.02): Keypair {
     const startIndex = this.currentIndex;
 
     for (let i = 0; i < this.wallets.length; i++) {
       const idx = (startIndex + i) % this.wallets.length;
       const wallet = this.wallets[idx];
 
+      // Auto-release stale inUse flag if lastUsed > 30 seconds ago
+      if (wallet.inUse && Date.now() - wallet.lastUsed > 30_000) {
+        wallet.inUse = false;
+      }
+
       if (wallet.inUse) continue;
       if (Date.now() - wallet.lastUsed < 5000) continue; // 5s Jito cooldown
+
+      // Skip wallets with insufficient SOL in Live Mainnet mode
+      if (!CONFIG.DRY_RUN && wallet.balance < minBalanceSol) continue;
 
       this.currentIndex = (idx + 1) % this.wallets.length;
       wallet.lastUsed = Date.now();
@@ -108,13 +116,15 @@ export class WalletManager {
       return wallet.keypair;
     }
 
-    // All wallets in use — force the one with the oldest lastUsed
-    const oldest = this.wallets.reduce((a, b) => a.lastUsed < b.lastUsed ? a : b);
+    // Fallback: Pick funded wallet with oldest lastUsed
+    const fundedWallets = CONFIG.DRY_RUN ? this.wallets : this.wallets.filter(w => w.balance >= minBalanceSol);
+    const pool = fundedWallets.length > 0 ? fundedWallets : this.wallets;
+    const oldest = pool.reduce((a, b) => a.lastUsed < b.lastUsed ? a : b);
     oldest.lastUsed = Date.now();
     oldest.totalSnipes++;
     oldest.inUse = true;
 
-    logger.warn({ wallet: oldest.address.slice(0, 8) + '...', force: true }, 'All wallets busy — forcing oldest wallet');
+    logger.warn({ wallet: oldest.address.slice(0, 8) + '...', force: true }, 'Assigned funded wallet');
     return oldest.keypair;
   }
 
@@ -126,7 +136,7 @@ export class WalletManager {
     }
   }
 
-  async refillWallets(masterKeypair: Keypair, refillThreshold: number = 0.5, refillAmount: number = 2.0): Promise<void> {
+  async refillWallets(masterKeypair: Keypair, refillThreshold: number = 0.3, refillAmount: number = 0.08): Promise<void> {
     if (CONFIG.DRY_RUN) return; // Skip refill in dry run
     
     const masterBalance = await this.connection.getBalance(masterKeypair.publicKey);
@@ -246,6 +256,13 @@ export class WalletManager {
   }
 
   getStats() {
+    const now = Date.now();
+    for (const w of this.wallets) {
+      if (w.inUse && now - w.lastUsed > 30_000) {
+        w.inUse = false;
+      }
+    }
+
     return {
       masterBalance: `${this.masterBalance.toFixed(4)} SOL`,
       totalWallets: this.wallets.length,

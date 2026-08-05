@@ -273,18 +273,16 @@ async function main() {
         return;
       }
 
-      // Guard: don't snipe if wallet balance is too low (DRY_RUN safety net)
-      if (CONFIG.DRY_RUN) {
-        const wStats = walletManager.getStats();
-        const minRequired = (CONFIG.SNIPE_AMOUNT_LAMPORTS / 1_000_000_000);
-        if (wStats.totalBalance < minRequired) {
-          logger.warn({ balance: wStats.totalBalance, minRequired }, '⚠️ Simulated balance too low — pausing new snipes');
-          return;
-        }
+      // Guard: don't snipe if wallet balance is too low
+      const wStats = walletManager.getStats();
+      const minRequired = (CONFIG.SNIPE_AMOUNT_LAMPORTS / 1_000_000_000);
+      if (wStats.totalBalance < minRequired) {
+        logger.warn({ balance: wStats.totalBalance, minRequired }, '⚠️ Total balance too low — pausing new snipes');
+        return;
       }
 
-      // Get next wallet from rotation
-      const snipeWallet = walletManager.getNextWallet();
+      // Get next wallet from rotation (only picks funded wallets in live mode)
+      const snipeWallet = walletManager.getNextWallet(minRequired);
       logger.info({ mint: event.mint.toBase58(), wallet: snipeWallet.publicKey.toBase58().slice(0, 8) + '...' }, '✅ Sniping via native builder');
 
       // Fix 12: Use nativeSnipe (Rust if compiled, JS fallback otherwise)
