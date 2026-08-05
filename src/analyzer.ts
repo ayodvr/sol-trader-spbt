@@ -23,7 +23,7 @@ export class RugAnalyzer {
     this.connection = new Connection(CONFIG.RPC_URL, 'confirmed');
   }
 
-  async analyze(mint: PublicKey, bondingCurveOrPool: PublicKey, creator?: PublicKey): Promise<RugCheckResult> {
+  async analyze(mint: PublicKey, bondingCurveOrPool: PublicKey, creator?: PublicKey, isAmm: boolean = false): Promise<RugCheckResult> {
     const mintStr = mint.toBase58();
 
     // Return cached result if still valid
@@ -144,15 +144,19 @@ export class RugAnalyzer {
       }
 
       // ─── Check 4: Volume Spike / Coordinated Pump Detection ───────────
-      const volumeCheck = await this.checkVolumeSpike(mintStr);
-      if (volumeCheck.isCoordinated) {
-        // Coordinated pump = wash trading by dev and insiders = INSTANT FAIL
-        result.flags.push(`COORDINATED_PUMP: ${volumeCheck.buyPct}% buys`);
-        result.score = 0;
-        result.safe = false;
-        logger.warn({ mint: mintStr, buyPct: volumeCheck.buyPct }, '⚠️ Coordinated pump — instant fail');
-        analysisCache.set(mintStr, { result, expiresAt: Date.now() + CACHE_TTL_MS });
-        return result;
+      // NOTE: Skipped for AMM pools — at graduation, ALL early txs are naturally buys
+      // (people rushing in), so the check always fires as a false positive there.
+      if (!isAmm) {
+        const volumeCheck = await this.checkVolumeSpike(mintStr);
+        if (volumeCheck.isCoordinated) {
+          // Coordinated pump = wash trading by dev and insiders = INSTANT FAIL
+          result.flags.push(`COORDINATED_PUMP: ${volumeCheck.buyPct}% buys`);
+          result.score = 0;
+          result.safe = false;
+          logger.warn({ mint: mintStr, buyPct: volumeCheck.buyPct }, '⚠️ Coordinated pump — instant fail');
+          analysisCache.set(mintStr, { result, expiresAt: Date.now() + CACHE_TTL_MS });
+          return result;
+        }
       }
 
       // ─── Check 5: Developer History via Helius (Cached) ───────────

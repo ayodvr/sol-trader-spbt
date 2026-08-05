@@ -220,12 +220,10 @@ export async function nativeSnipe(
       // Handle the instruction — either raw serialized (native) or object (JS)
       if (Buffer.isBuffer(instruction)) {
         // Native: instruction is a serialized bincode Instruction
-        // We can either deserialize it or append the raw CPI call
-        // Simplest: deserialize and add
-        const deserialized = native?.debugDeserializeInstruction 
+        const deserialized = native?.debugDeserializeInstruction
           ? JSON.parse(native.debugDeserializeInstruction(instruction))
           : null;
-        
+
         if (deserialized) {
           // Reconstruct from JSON
           const ix = {
@@ -238,6 +236,12 @@ export async function nativeSnipe(
             data: Buffer.from(deserialized.data_hex, 'hex'),
           };
           tx.add(ix);
+        } else {
+          // debugDeserializeInstruction not available — fall back to JS builder
+          // to avoid submitting an empty tx that Jito rejects with 400
+          logger.warn({ mint: mint.toBase58() }, '⚠️ Native deserialization unavailable — using JS builder fallback');
+          const jsFallback = await buildBuyInstruction(connection, mint, wallet.publicKey, bondingCurve, solAmountLamports, tokenProgramId);
+          tx.add(jsFallback.instruction as any);
         }
       } else {
         // JS: instruction is a plain object

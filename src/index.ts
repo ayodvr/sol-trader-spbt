@@ -382,7 +382,7 @@ async function main() {
     // Rate-limit: queue analysis to max 3 concurrent RPC operations
     runAnalysis(async () => {
 
-      const rugCheck = await analyzer.analyze(poolInfo.baseMint, poolInfo.poolAddress);
+      const rugCheck = await analyzer.analyze(poolInfo.baseMint, poolInfo.poolAddress, undefined, true);
       if (!rugCheck.safe) {
         stats.rugSkips++;
         logger.warn({ mint: poolInfo.baseMint.toBase58(), score: rugCheck.score, flags: rugCheck.flags }, '⛔ Skipped by anti-rug');
