@@ -157,9 +157,20 @@ export async function waitForBundleConfirmation(
         { timeout: 5_000 }
       );
 
-      const status = response.data?.result?.value?.[0]?.status;
-      if (status === 'confirmed' || status === 'finalized') return 'confirmed';
-      if (status === 'failed') return 'failed';
+      const val = response.data?.result?.value?.[0];
+      const statusStr = (val?.status || '').toLowerCase();
+      const confStatus = (val?.confirmation_status || '').toLowerCase();
+
+      if (
+        statusStr === 'landed' ||
+        statusStr === 'confirmed' ||
+        statusStr === 'finalized' ||
+        confStatus === 'confirmed' ||
+        confStatus === 'finalized'
+      ) {
+        return 'confirmed';
+      }
+      if (statusStr === 'failed') return 'failed';
     } catch {
       // Transient — keep polling
     }
