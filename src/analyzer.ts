@@ -184,7 +184,9 @@ export class RugAnalyzer {
       }
 
       // ─── Final verdict ───────────
-      result.safe = result.score >= 45;
+      // Threshold of 35 (was 45) — mainnet tokens frequently have freeze authority active
+      // or lack DexScreener socials at launch. Being too strict causes 100% skip rate.
+      result.safe = result.score >= 35;
       logger.info({
         mint: mintStr,
         safe: result.safe,
