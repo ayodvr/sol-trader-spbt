@@ -56,7 +56,8 @@ let jitoQueueChain: Promise<any> = Promise.resolve();
 async function executeSubmitJitoBundle(
   transactions: Transaction[],
   signers: Keypair[],
-  tipLamports: number
+  tipLamports: number,
+  connection?: any
 ): Promise<string | null> {
   try {
     // Add tip instruction to the last transaction
@@ -130,6 +131,23 @@ async function executeSubmitJitoBundle(
       }
     }
 
+    // ─── Direct RPC Fallback ───
+    if (connection) {
+      try {
+        logger.info('⚡ Jito endpoints throttled — falling back to direct RPC transaction broadcast');
+        const tx = transactions[0];
+        const rawTx = tx.serialize();
+        const txid = await connection.sendRawTransaction(rawTx, {
+          skipPreflight: true,
+          maxRetries: 3,
+        });
+        logger.info({ txid }, '✅ Buy transaction broadcasted directly via RPC fallback');
+        return txid;
+      } catch (rpcErr: any) {
+        logger.error({ err: rpcErr.message }, '❌ Direct RPC fallback submission failed');
+      }
+    }
+
     logger.error('❌ All Jito regional bundle submission attempts failed');
     return null;
   } catch (err: any) {
@@ -146,9 +164,10 @@ async function executeSubmitJitoBundle(
 export async function submitJitoBundle(
   transactions: Transaction[],
   signers: Keypair[],
-  tipLamports: number = CONFIG.JITO_TIP_LAMPORTS
+  tipLamports: number = CONFIG.JITO_TIP_LAMPORTS,
+  connection?: any
 ): Promise<string | null> {
-  const task = jitoQueueChain.then(() => executeSubmitJitoBundle(transactions, signers, tipLamports));
+  const task = jitoQueueChain.then(() => executeSubmitJitoBundle(transactions, signers, tipLamports, connection));
   jitoQueueChain = task.catch(() => {});
   return task;
 }

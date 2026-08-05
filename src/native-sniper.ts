@@ -258,7 +258,8 @@ export async function nativeSnipe(
       const bundleId = await submitJitoBundle(
         [tx],
         [wallet],
-        tipLamports
+        tipLamports,
+        connection
       );
 
       if (!bundleId) {

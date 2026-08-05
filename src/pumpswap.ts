@@ -212,7 +212,7 @@ export async function ammBuy(
     tx.recentBlockhash = blockhash;
 
     const dynamicTipLamports = TipCalculator.calculateTip(score, false);
-    const bundleId = await submitJitoBundle([tx], [wallet], dynamicTipLamports);
+    const bundleId = await submitJitoBundle([tx], [wallet], dynamicTipLamports, connection);
     if (!bundleId) return { success: false, error: 'Failed to submit AMM buy bundle' };
 
     const status = await waitForBundleConfirmation(bundleId, 30, 500);
