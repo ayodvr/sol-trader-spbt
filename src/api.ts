@@ -21,6 +21,7 @@ export interface BotControls {
   start: () => void;
   stop: () => void;
   forceExit?: (mint: string) => Promise<boolean>;
+  sweepWallets?: () => Promise<{ success: boolean; message: string }>;
   updateConfig: (updates: Record<string, string>) => void;
 }
 
@@ -206,6 +207,21 @@ export function startApi(state: BotState, controls: BotControls) {
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed manual exit');
       res.status(500).json({ error: 'Failed to execute manual exit' });
+    }
+  });
+
+  // Manual sweep all sub-wallets back to Master Vault
+  app.post(['/sweep', '/sweep-wallets'], authMiddleware, async (req, res) => {
+    try {
+      if (controls.sweepWallets) {
+        const result = await controls.sweepWallets();
+        broadcastUpdate();
+        return res.json(result);
+      }
+      return res.status(500).json({ error: 'Sweep function not supported' });
+    } catch (err: any) {
+      logger.error({ err: err.message }, 'Failed manual sweep from API');
+      res.status(500).json({ error: err.message || 'Failed to sweep wallets' });
     }
   });
 

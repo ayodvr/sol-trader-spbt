@@ -9,6 +9,7 @@
     "build": "tsc",
     "build:native": "cd native-builder && npm install && npm run build",
     "prod": "node dist/index.js",
+    "sweep": "tsx scripts/sweep-all.ts",
     "benchmark": "tsx src/benchmark.ts"
   },
   "dependencies": {

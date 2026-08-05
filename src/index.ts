@@ -216,6 +216,12 @@ async function main() {
       }
       return false;
     },
+    sweepWallets: async () => {
+      logger.info('🧹 Manual sweep requested via API / dashboard');
+      await walletManager.sweepWallets(masterKeypair, 0.001, 0.0);
+      await walletManager.refreshBalances();
+      return { success: true, message: 'All sub-wallet SOL swept back to Master Vault!' };
+    },
     updateConfig: (updates: Record<string, string>) => {
       let modeChanged = false;
 
