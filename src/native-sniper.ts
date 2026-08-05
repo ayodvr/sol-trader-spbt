@@ -266,7 +266,7 @@ export async function nativeSnipe(
         throw new Error('Failed to get bundle ID');
       }
 
-      const status = await waitForBundleConfirmation(bundleId, 30, 500);
+      const status = await waitForBundleConfirmation(bundleId, 30, 500, connection);
 
       if (status === 'confirmed') {
         const balance = await connection.getTokenAccountBalance(userTokenAccount);

@@ -215,7 +215,7 @@ export async function ammBuy(
     const bundleId = await submitJitoBundle([tx], [wallet], dynamicTipLamports, connection);
     if (!bundleId) return { success: false, error: 'Failed to submit AMM buy bundle' };
 
-    const status = await waitForBundleConfirmation(bundleId, 30, 500);
+    const status = await waitForBundleConfirmation(bundleId, 30, 500, connection);
     if (status === 'confirmed') {
       logger.info({ bundleId }, '✅ AMM Buy confirmed');
       return { success: true, bundleId };

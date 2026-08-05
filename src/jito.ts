@@ -173,12 +173,13 @@ export async function submitJitoBundle(
 }
 
 /**
- * Poll for bundle confirmation status
+ * Poll for bundle/transaction confirmation status across both Solana RPC and Jito block engines.
  */
 export async function waitForBundleConfirmation(
   bundleId: string,
   maxRetries: number = 20,
-  delayMs: number = 1000
+  delayMs: number = 1000,
+  connection?: any
 ): Promise<'confirmed' | 'failed' | 'pending'> {
   if (CONFIG.DRY_RUN && bundleId.startsWith('dry_run')) {
     logger.info({ bundleId }, 'DRY_RUN: Simulating bundle confirmation (success)');
@@ -186,6 +187,25 @@ export async function waitForBundleConfirmation(
   }
 
   for (let i = 0; i < maxRetries; i++) {
+    // 1. Check Solana RPC signature status if connection is provided
+    if (connection) {
+      try {
+        const sigStatus = await connection.getSignatureStatus(bundleId);
+        const confStatus = sigStatus.value?.confirmationStatus;
+        if (confStatus === 'confirmed' || confStatus === 'finalized') {
+          logger.info({ bundleId, confStatus }, '✅ Transaction confirmed on-chain via RPC');
+          return 'confirmed';
+        }
+        if (sigStatus.value?.err) {
+          logger.error({ bundleId, err: sigStatus.value.err }, '❌ Transaction failed on-chain');
+          return 'failed';
+        }
+      } catch {
+        // Transient RPC error — continue to Jito check
+      }
+    }
+
+    // 2. Check Jito regional endpoints for bundle status
     for (const endpoint of JITO_ENDPOINTS) {
       try {
         const response = await axios.post(
