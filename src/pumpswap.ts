@@ -336,59 +336,6 @@ export async function watchAmmPoolCreations(
   // not just creation — without this, the analysis queue gets flooded.
   const seenPools = new Set<string>();
 
-  // ─── Dual Watcher: 1) onLogs for instant 30ms detection, 2) onProgramAccountChange fallback ───
-  try {
-    connection.onLogs(
-      PUMP_SWAP_PROGRAM,
-      async (logsInfo) => {
-        try {
-          if (!logsInfo.logs || logsInfo.err) return;
-          const logStr = logsInfo.logs.join(' ');
-          if (!logStr.includes('CreatePool') && !logStr.includes('create_pool') && !logStr.includes('Initialize')) return;
-
-          // Instant 30ms fetch of transaction details
-          const tx = await connection.getParsedTransaction(logsInfo.signature, { maxSupportedTransactionVersion: 0 });
-          if (!tx?.transaction?.message?.instructions) return;
-
-          for (const ix of tx.transaction.message.instructions) {
-            if (ix.programId && ix.programId.toBase58() === PUMP_SWAP_PROGRAM.toBase58()) {
-              const accounts = (ix as any).accounts;
-              if (accounts && accounts.length >= 4) {
-                const poolAddress = new PublicKey(accounts[1]);
-                const baseMint = new PublicKey(accounts[2]);
-                const quoteMint = new PublicKey(accounts[3]);
-
-                const poolKey = poolAddress.toBase58();
-                if (seenPools.has(poolKey)) continue;
-                seenPools.add(poolKey);
-
-                const baseMintStr = baseMint.toBase58();
-                const WSOL = 'So11111111111111111111111111111111111111112';
-                if (baseMintStr === WSOL || !/pump$/i.test(baseMintStr)) continue;
-
-                const poolInfo: AmmPoolInfo = {
-                  poolAddress,
-                  baseMint,
-                  quoteMint,
-                  creator: new PublicKey(accounts[6] || accounts[0]),
-                  poolIndex: 0,
-                  baseReserves: 1073000189n,
-                  quoteReserves: 30000000000n,
-                  cashbackEnabled: false,
-                  poolBump: 0,
-                };
-
-                logger.info({ pool: poolKey, baseMint: baseMintStr, sig: logsInfo.signature }, '⚡ INSTANT 30ms AMM Pool Detected via Logs');
-                onNewPool(poolInfo);
-              }
-            }
-          }
-        } catch {}
-      },
-      'confirmed'
-    );
-  } catch {}
-
   const subId = connection.onProgramAccountChange(
     PUMP_SWAP_PROGRAM,
     async (keyedAccountInfo) => {
