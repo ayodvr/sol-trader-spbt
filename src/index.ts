@@ -396,17 +396,15 @@ async function main() {
         return;
       }
 
-      // Guard: don't snipe if wallet balance is too low (DRY_RUN safety net)
-      if (CONFIG.DRY_RUN) {
-        const wStats = walletManager.getStats();
-        const minRequired = (CONFIG.SNIPE_AMOUNT_LAMPORTS / 1_000_000_000);
-        if (wStats.totalBalance < minRequired) {
-          logger.warn({ balance: wStats.totalBalance, minRequired }, '⚠️ Simulated balance too low — pausing new AMM snipes');
-          return;
-        }
+      // Guard: don't snipe if wallet balance is too low
+      const wStats = walletManager.getStats();
+      const minRequired = (CONFIG.SNIPE_AMOUNT_LAMPORTS / 1_000_000_000);
+      if (wStats.totalBalance < minRequired) {
+        logger.warn({ balance: wStats.totalBalance, minRequired }, '⚠️ Total balance too low — pausing new AMM snipes');
+        return;
       }
 
-      const snipeWallet = walletManager.getNextWallet();
+      const snipeWallet = walletManager.getNextWallet(minRequired);
       const snipeLamports = CONFIG.SNIPE_AMOUNT_LAMPORTS;
 
       const estimatedTokens = BigInt(
@@ -430,6 +428,7 @@ async function main() {
 
       if (result.success) {
         stats.totalAmmSnipes++;
+        walletManager.recordSuccessfulSnipe(snipeWallet.publicKey);
         telegram.onSnipe({
           mint: poolInfo.baseMint.toBase58(),
           solSpent: (snipeLamports / 1_000_000_000).toFixed(4),
