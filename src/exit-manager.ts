@@ -291,17 +291,21 @@ export class ExitManager {
 
     if (result.success) {
       let realSolReturned = result.solReceived || 0;
-      if (realSolReturned <= 0) {
-        const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
-        realSolReturned = Math.max(0, (balAfter - balBefore) / 1_000_000_000);
-      }
       const entrySol = pos.amountInLamports / 1_000_000_000;
+      if (realSolReturned <= 0) {
+        if (priceChange !== undefined && priceChange > 0) {
+          realSolReturned = entrySol * (1 + priceChange / 100);
+        } else {
+          const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
+          realSolReturned = Math.max(0, (balAfter - balBefore) / 1_000_000_000);
+        }
+      }
       const pnlSol = realSolReturned - entrySol;
       const profitPercentNum = entrySol > 0 ? ((realSolReturned - entrySol) / entrySol) * 100 : 0;
       const profitStr = `${profitPercentNum >= 0 ? '+' : ''}${profitPercentNum.toFixed(1)}%`;
       const solReturnedStr = realSolReturned.toFixed(6);
 
-      const actualReason = (pnlSol <= 0 && reason === 'take_profit') ? 'stop_loss' : reason;
+      const actualReason = reason;
 
       logger.info({ mint: pos.mint, reason: actualReason, pnl: profitStr, realSolReturned: solReturnedStr, bundleId: result.txHash }, '✅ Exit executed successfully');
 

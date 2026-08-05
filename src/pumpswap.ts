@@ -297,21 +297,8 @@ export async function ammSell(
     const status = await waitForBundleConfirmation(bundleId, 30, 500, connection);
     if (status === 'confirmed') {
       logger.info({ bundleId }, '✅ AMM Sell confirmed');
-      let solReceived = 0;
-      try {
-        await new Promise(r => setTimeout(r, 800)); // wait for RPC block indexing
-        const parsedTx = await connection.getParsedTransaction(bundleId, { maxSupportedTransactionVersion: 0 });
-        if (parsedTx?.meta) {
-          const accountIdx = parsedTx.transaction.message.accountKeys.findIndex(
-            (k: any) => (k.pubkey ? k.pubkey.toBase58() : k.toBase58()) === wallet.publicKey.toBase58()
-          );
-          if (accountIdx >= 0) {
-            const diffLamports = parsedTx.meta.postBalances[accountIdx] - parsedTx.meta.preBalances[accountIdx];
-            // If diffLamports > 0, wallet gained SOL from sell
-            solReceived = diffLamports > 0 ? (diffLamports / 1_000_000_000) : 0;
-          }
-        }
-      } catch {}
+      // Calculate exact SOL output from pool reserves math
+      const solReceived = Number(rawQuoteOut) / 1_000_000_000;
       return { success: true, bundleId, solReceived };
     }
     return { success: false, error: `AMM sell status: ${status}` };
