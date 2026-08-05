@@ -83,17 +83,17 @@ async function executeSubmitJitoBundle(
       return `dry_run_bundle_${Date.now()}`;
     }
 
-    // ─── Rate Limit Guard: Jito public API allows max 1 bundle request per second ───
-    const now = Date.now();
-    const timeSinceLast = now - lastJitoSubmitTime;
-    if (timeSinceLast < 1100) {
-      const waitMs = 1100 - timeSinceLast;
-      await new Promise(r => setTimeout(r, waitMs));
-    }
-    lastJitoSubmitTime = Date.now();
-
     // Try up to 3 regional endpoints if one fails or rate-limits
     for (let attempt = 0; attempt < 3; attempt++) {
+      // ─── Rate Limit Guard: Jito public API allows max 1 bundle request per second PER IP ───
+      const now = Date.now();
+      const timeSinceLast = now - lastJitoSubmitTime;
+      if (timeSinceLast < 1100) {
+        const waitMs = 1100 - timeSinceLast;
+        await new Promise(r => setTimeout(r, waitMs));
+      }
+      lastJitoSubmitTime = Date.now();
+
       const targetEndpoint = getJitoEndpoint();
 
       try {
@@ -128,9 +128,6 @@ async function executeSubmitJitoBundle(
       } catch (err: any) {
         logger.warn({ err: err.message, response: err.response?.data, endpoint: targetEndpoint }, 'Jito endpoint error — retrying next region');
       }
-
-      // Brief 200ms delay between fallback endpoints
-      await new Promise(r => setTimeout(r, 200));
     }
 
     logger.error('❌ All Jito regional bundle submission attempts failed');
