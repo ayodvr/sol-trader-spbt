@@ -239,8 +239,12 @@ export async function ammSell(
   tokenProgramId: PublicKey = TOKEN_PROGRAM_ID, // Token-2022 or standard SPL
 ): Promise<{ success: boolean; bundleId?: string; error?: string }> {
   try {
-    const rawQuoteOut = baseAmountIn * poolInfo.quoteReserves / (poolInfo.baseReserves + baseAmountIn);
-    const minQuoteOut = rawQuoteOut * BigInt(100 - slippagePercent) / 100n;
+    if (baseAmountIn <= 0n) {
+      return { success: false, error: 'Token balance is 0 — nothing to sell' };
+    }
+    const denom = (poolInfo.baseReserves || 1073000189n) + baseAmountIn;
+    const rawQuoteOut = denom > 0n ? (baseAmountIn * (poolInfo.quoteReserves || 30_000_000_000n) / denom) : 0n;
+    const minQuoteOut = isEmergency ? 0n : (rawQuoteOut * BigInt(Math.max(0, 100 - slippagePercent)) / 100n);
 
     const userBaseTokenAccount = await getAssociatedTokenAddress(poolInfo.baseMint, wallet.publicKey, false, tokenProgramId);
     const userQuoteTokenAccount = await getAssociatedTokenAddress(poolInfo.quoteMint, wallet.publicKey, false, TOKEN_PROGRAM_ID); // WSOL is always SPL
