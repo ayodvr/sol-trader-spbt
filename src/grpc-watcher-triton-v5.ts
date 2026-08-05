@@ -176,7 +176,7 @@ export class GrpcWatcherV5 {
       },
       entry: {},
       accountsDataSlice: [],
-      commitment: CommitmentLevel.PROCESSED,
+      commitment: 1, // 1 = PROCESSED in Yellowstone gRPC proto enum
     };
 
     if (this.lastSlot > 0) {
