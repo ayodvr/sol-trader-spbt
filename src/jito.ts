@@ -41,6 +41,7 @@ const JITO_ENDPOINTS = [
 
 let lastJitoSubmitTime = 0;
 let endpointIndex = 0;
+let jitoThrottledUntil = 0; // Timestamp until which Jito calls are paused due to 429 rate limit
 
 function getJitoEndpoint(): string {
   if (CONFIG.JITO_BLOCK_ENGINE && CONFIG.JITO_BLOCK_ENGINE !== 'https://mainnet.block-engine.jito.wtf') {
@@ -92,57 +93,79 @@ async function executeSubmitJitoBundle(
       return `dry_run_bundle_${Date.now()}`;
     }
 
-    // Try up to 3 regional endpoints if one fails or rate-limits
-    for (let attempt = 0; attempt < 3; attempt++) {
-      // ─── Rate Limit Guard: Jito public API allows max 1 bundle request per second PER IP ───
-      const now = Date.now();
-      const timeSinceLast = now - lastJitoSubmitTime;
-      if (timeSinceLast < 1100) {
-        const waitMs = 1100 - timeSinceLast;
-        await new Promise(r => setTimeout(r, waitMs));
-      }
-      lastJitoSubmitTime = Date.now();
-
-      const targetEndpoint = getJitoEndpoint();
-
-      try {
-        logger.info({
-          bundleSize: serializedTxs.length,
-          tip: `${(tipLamports / 1_000_000_000).toFixed(4)} SOL`,
-          endpoint: targetEndpoint,
-          attempt: attempt + 1,
-        }, 'Submitting Jito bundle');
-
-        const response = await axios.post(
-          `${targetEndpoint}/api/v1/bundles`,
-          {
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'sendBundle',
-            params: [serializedTxs],
-          },
-          {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 10_000,
-          }
-        );
-
-        const bundleId = response.data?.result;
-        if (bundleId) {
-          logger.info({ bundleId, endpoint: targetEndpoint }, '✅ Bundle submitted');
-          return bundleId;
+    // ─── Rate Limit Circuit Breaker Check ───
+    const now = Date.now();
+    if (now < jitoThrottledUntil) {
+      const remainingSec = Math.ceil((jitoThrottledUntil - now) / 1000);
+      logger.warn({ remainingSec }, '⚡ Jito in rate-limit cooldown — skipping bundle, routing directly to RPC broadcast');
+    } else {
+      // Try regional endpoints if not throttled
+      for (let attempt = 0; attempt < 3; attempt++) {
+        // Enforce min 1.2s spacing between Jito API calls from this client
+        const currentNow = Date.now();
+        const timeSinceLast = currentNow - lastJitoSubmitTime;
+        if (timeSinceLast < 1200) {
+          const waitMs = 1200 - timeSinceLast;
+          await new Promise(r => setTimeout(r, waitMs));
         }
+        lastJitoSubmitTime = Date.now();
 
-        logger.warn({ response: response.data, endpoint: targetEndpoint }, 'Jito endpoint returned non-bundle result — retrying next region');
-      } catch (err: any) {
-        logger.warn({ err: err.message, response: err.response?.data, endpoint: targetEndpoint }, 'Jito endpoint error — retrying next region');
+        const targetEndpoint = getJitoEndpoint();
+
+        try {
+          logger.info({
+            bundleSize: serializedTxs.length,
+            tip: `${(tipLamports / 1_000_000_000).toFixed(4)} SOL`,
+            endpoint: targetEndpoint,
+            attempt: attempt + 1,
+          }, 'Submitting Jito bundle');
+
+          const response = await axios.post(
+            `${targetEndpoint}/api/v1/bundles`,
+            {
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'sendBundle',
+              params: [serializedTxs],
+            },
+            {
+              headers: { 'Content-Type': 'application/json' },
+              timeout: 10_000,
+            }
+          );
+
+          const bundleId = response.data?.result;
+          if (bundleId) {
+            logger.info({ bundleId, endpoint: targetEndpoint }, '✅ Bundle submitted');
+            return bundleId;
+          }
+
+          // Check if response contains rate limit error structure
+          const errCode = response.data?.error?.code;
+          if (errCode === -32097 || response.status === 429) {
+            jitoThrottledUntil = Date.now() + 60_000;
+            logger.warn({ endpoint: targetEndpoint, cooldownSec: 60 }, '⚡ Jito 429 Rate limit detected — activating 60s cooldown and falling back to RPC');
+            break; // Stop attempting other Jito endpoints (rate limit is per IP)
+          }
+
+          logger.warn({ response: response.data, endpoint: targetEndpoint }, 'Jito endpoint returned non-bundle result — retrying next region');
+        } catch (err: any) {
+          const statusCode = err.response?.status;
+          const is429 = statusCode === 429 || err.response?.data?.error?.code === -32097;
+          if (is429) {
+            jitoThrottledUntil = Date.now() + 60_000;
+            logger.warn({ endpoint: targetEndpoint, cooldownSec: 60 }, '⚡ Jito 429 Rate limit detected — activating 60s cooldown and falling back to RPC');
+            break; // Stop attempting other Jito endpoints
+          }
+          logger.warn({ err: err.message, response: err.response?.data, endpoint: targetEndpoint }, 'Jito endpoint error — retrying next region');
+        }
       }
     }
 
     // ─── Direct RPC Fallback ───
     if (connection) {
       try {
-        logger.info('⚡ Jito endpoints throttled — falling back to direct RPC transaction broadcast');
+        logger.info('⚡ Executing direct RPC transaction broadcast fallback');
         const tx = transactions[0];
         const rawTx = tx.serialize();
         const txid = await connection.sendRawTransaction(rawTx, {
@@ -195,7 +218,7 @@ export async function waitForBundleConfirmation(
   }
 
   for (let i = 0; i < maxRetries; i++) {
-    // 1. Check Solana RPC signature status if connection is provided
+    // 1. Primary check: Check Solana RPC signature status if connection is provided
     if (connection) {
       try {
         const sigStatus = await connection.getSignatureStatus(bundleId);
@@ -209,15 +232,16 @@ export async function waitForBundleConfirmation(
           return 'failed';
         }
       } catch {
-        // Transient RPC error — continue to Jito check
+        // Transient RPC error — proceed to Jito check if enabled
       }
     }
 
-    // 2. Check Jito regional endpoints for bundle status
-    for (const endpoint of JITO_ENDPOINTS) {
+    // 2. Secondary check: Query SINGLE Jito endpoint only if not throttled
+    if (Date.now() >= jitoThrottledUntil) {
       try {
+        const primaryEndpoint = JITO_ENDPOINTS[0];
         const response = await axios.post(
-          `${endpoint}/api/v1/bundles`,
+          `${primaryEndpoint}/api/v1/bundles`,
           {
             jsonrpc: '2.0',
             id: 1,
@@ -243,10 +267,14 @@ export async function waitForBundleConfirmation(
           }
           if (statusStr === 'failed') return 'failed';
         }
-      } catch {
-        // Transient error on this endpoint — check next region
+      } catch (err: any) {
+        if (err.response?.status === 429 || err.response?.data?.error?.code === -32097) {
+          jitoThrottledUntil = Date.now() + 60_000;
+          logger.warn('⚡ Jito rate-limited during status check — pausing Jito status queries for 60s');
+        }
       }
     }
+
     await new Promise(r => setTimeout(r, delayMs));
   }
   return 'pending';

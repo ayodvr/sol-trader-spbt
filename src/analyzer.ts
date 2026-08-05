@@ -118,7 +118,10 @@ export class RugAnalyzer {
             (virtualTokenReserves - realTokenReserves) * 10000n / virtualTokenReserves
           ) / 100;
 
-          if (tokenDeviation > 5) {
+          if (tokenDeviation > 30) {
+            result.flags.push(`HIGH_TOKEN_DEVIATION: ${tokenDeviation}%`);
+            result.score -= 45;
+          } else if (tokenDeviation > 5) {
             result.flags.push(`HIGH_TOKEN_DEVIATION: ${tokenDeviation}%`);
             result.score -= 25;
           }
@@ -136,9 +139,17 @@ export class RugAnalyzer {
         }
         result.top10HolderPercent = Number((top10Sum * 10000n) / totalSupply) / 100;
 
-        if (result.top10HolderPercent > 80) {
+        if (result.top10HolderPercent > 65) {
+          // Insiders/bundlers hold > 65% of supply = guaranteed fast-rug dump = INSTANT FAIL
+          result.flags.push(`EXCESSIVE_HOLDER_CONCENTRATION: ${result.top10HolderPercent}%`);
+          result.score = 0;
+          result.safe = false;
+          logger.warn({ mint: mintStr, pct: result.top10HolderPercent }, '⛔ Excessive top 10 holder concentration (>65%) — instant fail');
+          analysisCache.set(mintStr, { result, expiresAt: Date.now() + CACHE_TTL_MS });
+          return result;
+        } else if (result.top10HolderPercent > 50) {
           result.flags.push(`TOP_10_HOLDERS: ${result.top10HolderPercent}%`);
-          result.score -= 20;
+          result.score -= 30;
           logger.warn({ pct: result.top10HolderPercent }, '⚠️ High holder concentration');
         }
       }

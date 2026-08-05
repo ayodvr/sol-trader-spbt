@@ -30,8 +30,9 @@ exports.CONFIG = {
     MAX_BUY_TAX: parseInt(process.env.MAX_BUY_TAX || '15'),
     MAX_SELL_TAX: parseInt(process.env.MAX_SELL_TAX || '15'),
     // Social & Developer Filtering
-    REQUIRE_SOCIALS: process.env.REQUIRE_SOCIALS === 'true',
-    MIN_DEV_HISTORY_SCORE: parseInt(process.env.MIN_DEV_HISTORY_SCORE || '0'),
+    REQUIRE_SOCIALS: process.env.REQUIRE_SOCIALS !== 'false',
+    MIN_RUG_SCORE: parseInt(process.env.MIN_RUG_SCORE || '75'),
+    MIN_DEV_HISTORY_SCORE: parseInt(process.env.MIN_DEV_HISTORY_SCORE || '50'),
     BIRDEYE_API_KEY: process.env.BIRDEYE_API_KEY || '',
     // Exit triggers
     EXIT_PROFIT_PERCENT: parseInt(process.env.EXIT_PROFIT_PERCENT || '300'),
