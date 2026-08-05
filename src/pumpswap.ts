@@ -313,6 +313,11 @@ export async function watchAmmPoolCreations(
 ): Promise<number> {
   const POOL_DISCRIMINATOR = Buffer.from([241, 154, 109, 4, 17, 177, 109, 188]);
 
+  // Track seen pools to avoid processing the same pool on every swap event.
+  // onProgramAccountChange fires on EVERY account mutation (each buy/sell),
+  // not just creation — without this, the analysis queue gets flooded.
+  const seenPools = new Set<string>();
+
   const subId = connection.onProgramAccountChange(
     PUMP_SWAP_PROGRAM,
     async (keyedAccountInfo) => {
@@ -322,6 +327,11 @@ export async function watchAmmPoolCreations(
 
         const discriminator = data.subarray(0, 8);
         if (!discriminator.equals(POOL_DISCRIMINATOR)) return;
+
+        // ─── Deduplicate: only process each pool address once ───
+        const poolKey = keyedAccountInfo.accountId.toBase58();
+        if (seenPools.has(poolKey)) return;
+        seenPools.add(poolKey);
 
         const view = new DataView(data.buffer);
         const poolIndex = view.getUint16(9, true);
@@ -366,3 +376,4 @@ export async function watchAmmPoolCreations(
   logger.info(`Watching for new AMM pools (subscription: ${subId})`);
   return subId;
 }
+
