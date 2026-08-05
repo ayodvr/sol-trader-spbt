@@ -52,7 +52,7 @@ const customLogger = {
 const logger = pino({ name: 'main' }, customLogger);
 const MASTER_WALLET_PATH = './wallets.json';
 const USE_GRPC = !!(process.env.GRPC_ENDPOINT && process.env.GRPC_TOKEN);
-const USE_TRITON_V5 = process.env.GRPC_USE_TRITON_V5 === 'true'; // Fix 19: Triton v5 opt-in
+const USE_TRITON_V5 = process.env.GRPC_USE_TRITON_V5 !== 'false'; // Default to true whenever GRPC credentials exist
 
 async function main() {
   console.log(`
