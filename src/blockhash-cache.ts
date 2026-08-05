@@ -34,7 +34,7 @@ export class BlockhashCache {
   /**
    * Start a fallback polling interval (useful for WebSocket mode or startup).
    */
-  public startFallback(connection: Connection, intervalMs: number = 3000): void {
+  public startFallback(connection: Connection, intervalMs: number = 2000): void {
     if (this.fallbackInterval) {
       clearInterval(this.fallbackInterval);
     }
@@ -44,8 +44,8 @@ export class BlockhashCache {
     this.fetchFromRpc();
 
     this.fallbackInterval = setInterval(() => {
-      // Only fetch if the cache is stale (> 3 seconds old)
-      if (Date.now() - this.lastUpdateTime > 3000) {
+      // Only fetch if the cache is stale (> 2 seconds old)
+      if (Date.now() - this.lastUpdateTime > 2000) {
         this.fetchFromRpc();
       }
     }, intervalMs);
@@ -54,7 +54,7 @@ export class BlockhashCache {
   private async fetchFromRpc(): Promise<void> {
     if (!this.connection) return;
     try {
-      const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
+      const { blockhash } = await this.connection.getLatestBlockhash('finalized');
       this.set(blockhash);
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed to fetch fallback blockhash');
@@ -73,18 +73,18 @@ export class BlockhashCache {
 
   /**
    * Get the current blockhash. 
-   * Instantly returns the cached blockhash if available and fresh.
+   * Instantly returns the cached blockhash if available and fresh (< 5s).
    * If empty or stale, it fetches synchronously from the RPC as a last resort.
    */
   public async get(connection: Connection): Promise<string> {
-    // If we have a cached blockhash updated in the last 75 slots (~30s), use it.
-    if (this.currentBlockhash && (Date.now() - this.lastUpdateTime < 30_000)) {
+    // If we have a cached blockhash updated in the last 5 seconds, use it.
+    if (this.currentBlockhash && (Date.now() - this.lastUpdateTime < 5_000)) {
       return this.currentBlockhash;
     }
 
     // Cache miss or stale — fallback to RPC (should only happen on immediate startup)
-    logger.warn('Blockhash cache miss — fetching from RPC');
-    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    logger.warn('Blockhash cache miss — fetching fresh blockhash from RPC');
+    const { blockhash } = await connection.getLatestBlockhash('finalized');
     this.set(blockhash);
     return blockhash;
   }

@@ -17,6 +17,7 @@ import { watchAmmPoolCreations, ammBuy, AmmPoolInfo } from './pumpswap.js';
 import { decodePrivateKey } from './utils.js';
 import { NewTokenEvent } from './types.js';
 import { startApi } from './api.js';
+import { blockhashCache } from './blockhash-cache.js';
 import pino from 'pino';
 import fs from 'fs';
 
@@ -78,6 +79,7 @@ async function main() {
   // ─── Shared components ───
   const analyzer = new RugAnalyzer();
   const connection = new Connection(CONFIG.RPC_URL, 'confirmed');
+  blockhashCache.startFallback(connection, 2000);
 
   // ─── Stats ───
   const stats = {
