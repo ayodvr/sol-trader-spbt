@@ -68,7 +68,15 @@ async function executeSubmitJitoBundle(
       toPubkey: tipAccount,
       lamports: safeTipLamports,
     });
-    transactions[transactions.length - 1].add(tipIx);
+    // Explicitly guarantee write-lock flag for Jito auction engine
+    tipIx.keys.forEach(k => {
+      if (k.pubkey.equals(tipAccount)) {
+        k.isWritable = true;
+      }
+    });
+
+    const targetTx = transactions[transactions.length - 1];
+    targetTx.add(tipIx);
 
     // Serialize all transactions to base58 (required by Jito JSON-RPC API)
     const serializedTxs = transactions.map((tx) => {

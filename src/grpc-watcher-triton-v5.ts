@@ -119,8 +119,12 @@ export class GrpcWatcherV5 {
         }
       );
 
-      // Create subscription stream (returns a native stream.Duplex()
-      // backed by the Rust gRPC client, not JS @grpc/grpc-js)
+      // Connect client first before subscribing
+      if (typeof this.client.connect === 'function') {
+        await this.client.connect();
+      }
+
+      // Create subscription stream
       this.stream = await this.client.subscribe();
 
       // Wire up event handlers
