@@ -297,7 +297,8 @@ export class ExitManager {
         // Rugged position: liquidity was drained by dev = 0 SOL returned
         realSolReturned = 0;
       } else {
-        // Check actual on-chain SOL balance change first
+        // Wait 1.5s for Solana RPC indexer to process post-tx balance update
+        await new Promise(r => setTimeout(r, 1500));
         const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
         const netSolDiff = (balAfter - balBefore) / 1_000_000_000;
         if (netSolDiff > 0) {
