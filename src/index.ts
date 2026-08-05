@@ -140,9 +140,35 @@ async function main() {
   // ─── Refill wallets  // Initial refill check (distribute 0.8 SOL to each sub-wallet if they need it)
   await walletManager.refillWallets(masterKeypair, 0.3, 0.8);
 
-  // ─── API Integration ───
+  // ─── API Integration & Trade History Persistence ───
   const exitManagers: ExitManager[] = [];
+  const TRADE_HISTORY_FILE = './trade-history.json';
   const tradeHistory: any[] = [];
+
+  try {
+    if (fs.existsSync(TRADE_HISTORY_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(TRADE_HISTORY_FILE, 'utf-8'));
+      if (Array.isArray(saved.history)) tradeHistory.push(...saved.history);
+      if (saved.stats) {
+        stats.successfulExits = saved.stats.successfulExits || 0;
+        stats.totalPnl = saved.stats.totalPnl || 0;
+      }
+      logger.info({ count: tradeHistory.length, totalPnl: stats.totalPnl }, 'Loaded trade history and stats from disk');
+    }
+  } catch {}
+
+  function saveTradeHistoryDisk() {
+    try {
+      fs.writeFileSync(TRADE_HISTORY_FILE, JSON.stringify({
+        history: tradeHistory,
+        stats: {
+          successfulExits: stats.successfulExits,
+          totalPnl: stats.totalPnl,
+        }
+      }, null, 2));
+    } catch {}
+  }
+
   const botState = {
     isRunning: loadPersistedRunning(),
     get isTestMode() { return CONFIG.DRY_RUN; },
@@ -316,6 +342,7 @@ async function main() {
           if (tradeInfo) {
             tradeHistory.unshift(tradeInfo);
             if (tradeHistory.length > 50) tradeHistory.pop();
+            saveTradeHistoryDisk();
           }
         });
         exitManagers.push(exitManager);
@@ -455,6 +482,7 @@ async function main() {
           if (tradeInfo) {
             tradeHistory.unshift(tradeInfo);
             if (tradeHistory.length > 50) tradeHistory.pop();
+            saveTradeHistoryDisk();
           }
         });
         exitManagers.push(exitManager);
