@@ -51,15 +51,12 @@ function getJitoEndpoint(): string {
   return ep;
 }
 
-/**
- * Submit a bundle of transactions to Jito's block engine.
- * All transactions execute atomically and in order.
- * A tip instruction is appended to the last transaction.
- */
-export async function submitJitoBundle(
+let jitoQueueChain: Promise<any> = Promise.resolve();
+
+async function executeSubmitJitoBundle(
   transactions: Transaction[],
   signers: Keypair[],
-  tipLamports: number = CONFIG.JITO_TIP_LAMPORTS
+  tipLamports: number
 ): Promise<string | null> {
   try {
     // Add tip instruction to the last transaction
@@ -89,8 +86,8 @@ export async function submitJitoBundle(
     // ─── Rate Limit Guard: Jito public API allows max 1 bundle request per second ───
     const now = Date.now();
     const timeSinceLast = now - lastJitoSubmitTime;
-    if (timeSinceLast < 1050) {
-      const waitMs = 1050 - timeSinceLast;
+    if (timeSinceLast < 1100) {
+      const waitMs = 1100 - timeSinceLast;
       await new Promise(r => setTimeout(r, waitMs));
     }
     lastJitoSubmitTime = Date.now();
@@ -129,6 +126,21 @@ export async function submitJitoBundle(
     logger.error({ err: err.message, response: err.response?.data }, 'Jito bundle error');
     return null;
   }
+}
+
+/**
+ * Submit a bundle of transactions to Jito's block engine.
+ * All transactions execute atomically and in order.
+ * Uses a serial promise queue to strictly enforce 1.1s spacing between requests.
+ */
+export async function submitJitoBundle(
+  transactions: Transaction[],
+  signers: Keypair[],
+  tipLamports: number = CONFIG.JITO_TIP_LAMPORTS
+): Promise<string | null> {
+  const task = jitoQueueChain.then(() => executeSubmitJitoBundle(transactions, signers, tipLamports));
+  jitoQueueChain = task.catch(() => {});
+  return task;
 }
 
 /**
