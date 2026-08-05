@@ -35,8 +35,8 @@ exports.CONFIG = {
     MIN_DEV_HISTORY_SCORE: parseInt(process.env.MIN_DEV_HISTORY_SCORE || '50'),
     BIRDEYE_API_KEY: process.env.BIRDEYE_API_KEY || '',
     // Exit triggers
-    EXIT_PROFIT_PERCENT: parseInt(process.env.EXIT_PROFIT_PERCENT || '300'),
-    EXIT_DRAWDOWN_PERCENT: parseInt(process.env.EXIT_DRAWDOWN_PERCENT || '30'),
+    EXIT_PROFIT_PERCENT: parseInt(process.env.EXIT_PROFIT_PERCENT || '35'),
+    EXIT_DRAWDOWN_PERCENT: parseInt(process.env.EXIT_DRAWDOWN_PERCENT || '25'),
     // On-chain constants
     PUMP_PROGRAM_ID: new web3_js_1.PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'),
     PUMP_AMM_PROGRAM_ID: new web3_js_1.PublicKey('pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA'),
