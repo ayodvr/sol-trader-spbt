@@ -298,6 +298,7 @@ async function main() {
 
       if (result.success) {
         stats.totalBondingCurveSnipes++;
+        walletManager.recordSuccessfulSnipe(snipeWallet.publicKey);
 
         if (CONFIG.DRY_RUN) {
           walletManager.modifyVirtualBalance(snipeWallet.publicKey, -CONFIG.SNIPE_AMOUNT_LAMPORTS);

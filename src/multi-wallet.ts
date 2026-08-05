@@ -105,7 +105,6 @@ export class WalletManager {
 
       this.currentIndex = (idx + 1) % this.wallets.length;
       wallet.lastUsed = Date.now();
-      wallet.totalSnipes++;
       wallet.inUse = true;
 
       logger.debug({
@@ -121,11 +120,23 @@ export class WalletManager {
     const pool = fundedWallets.length > 0 ? fundedWallets : this.wallets;
     const oldest = pool.reduce((a, b) => a.lastUsed < b.lastUsed ? a : b);
     oldest.lastUsed = Date.now();
-    oldest.totalSnipes++;
     oldest.inUse = true;
 
     logger.warn({ wallet: oldest.address.slice(0, 8) + '...', force: true }, 'Assigned funded wallet');
     return oldest.keypair;
+  }
+
+  recordSuccessfulSnipe(publicKey: PublicKey): void {
+    const wallet = this.wallets.find(w => w.address === publicKey.toBase58());
+    if (wallet) {
+      wallet.totalSnipes++;
+    }
+  }
+
+  resetSnipeCounters(): void {
+    for (const w of this.wallets) {
+      w.totalSnipes = 0;
+    }
   }
 
   releaseWallet(publicKey: PublicKey): void {
