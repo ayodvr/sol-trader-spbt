@@ -300,9 +300,7 @@ export async function ammSell(
     const status = await waitForBundleConfirmation(bundleId, 30, 500, connection);
     if (status === 'confirmed') {
       logger.info({ bundleId }, '✅ AMM Sell confirmed');
-      // If emergency sell (rug), liquidity was drained = 0 SOL returned
-      const solReceived = isEmergency ? 0 : Number(rawQuoteOut) / 1_000_000_000;
-      return { success: true, bundleId, solReceived };
+      return { success: true, bundleId };
     }
     return { success: false, error: `AMM sell status: ${status}` };
 

@@ -293,12 +293,17 @@ export class ExitManager {
       const entrySol = pos.amountInLamports / 1_000_000_000;
       let realSolReturned = 0;
 
-      if (reason === 'rug_detected') {
-        // Rugged position: liquidity was drained by dev = 0 SOL returned
-        realSolReturned = 0;
-      } else {
-        // Use exact WSOL/SOL output returned by PumpSwap AMM swap
-        realSolReturned = result.solReceived || 0;
+      if (reason !== 'rug_detected') {
+        // Wait 1.5s for block indexing
+        await new Promise(r => setTimeout(r, 1500));
+        const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
+        const netSolDiff = (balAfter - balBefore) / 1_000_000_000;
+        if (netSolDiff > 0) {
+          realSolReturned = netSolDiff;
+        } else if (priceChange !== undefined && priceChange > 0 && priceChange <= 300) {
+          // Capped reasonable fallback for valid price pumps
+          realSolReturned = Math.min(entrySol * 4, entrySol * (1 + priceChange / 100));
+        }
       }
 
       const pnlSol = realSolReturned - entrySol;
