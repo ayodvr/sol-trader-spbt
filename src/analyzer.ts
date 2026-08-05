@@ -188,9 +188,12 @@ export class RugAnalyzer {
       }
 
       // ─── Final verdict ───────────
-      // Threshold of 35 (was 45) — mainnet tokens frequently have freeze authority active
-      // or lack DexScreener socials at launch. Being too strict causes 100% skip rate.
-      result.safe = result.score >= 35;
+      if (CONFIG.REQUIRE_SOCIALS && !result.hasSocials) {
+        result.safe = false;
+        logger.info({ mint: mintStr }, '⛔ Hard-skipped: Social links required by CONFIG.REQUIRE_SOCIALS');
+      } else {
+        result.safe = result.score >= CONFIG.MIN_RUG_SCORE;
+      }
       logger.info({
         mint: mintStr,
         safe: result.safe,

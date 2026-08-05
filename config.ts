@@ -32,7 +32,8 @@ export const CONFIG = {
   MAX_SELL_TAX: parseInt(process.env.MAX_SELL_TAX || '15'),
 
   // Social & Developer Filtering
-  REQUIRE_SOCIALS: process.env.REQUIRE_SOCIALS === 'true',
+  REQUIRE_SOCIALS: process.env.REQUIRE_SOCIALS !== 'false', // Default to true for high quality
+  MIN_RUG_SCORE: parseInt(process.env.MIN_RUG_SCORE || '60'),
   MIN_DEV_HISTORY_SCORE: parseInt(process.env.MIN_DEV_HISTORY_SCORE || '0'),
   HELIUS_API_KEY: process.env.HELIUS_API_KEY || '',  // Used for dev history check
   BIRDEYE_API_KEY: process.env.BIRDEYE_API_KEY || '', // Legacy — kept for compatibility
