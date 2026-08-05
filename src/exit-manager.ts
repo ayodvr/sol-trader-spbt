@@ -301,12 +301,15 @@ export class ExitManager {
         await new Promise(r => setTimeout(r, 1500));
         const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
         const netSolDiff = (balAfter - balBefore) / 1_000_000_000;
+        
+        // Strictly measure actual SOL returned on-chain
         if (netSolDiff > 0) {
           realSolReturned = netSolDiff;
-        } else if (result.solReceived && result.solReceived > 0) {
+        } else if (result.solReceived && result.solReceived > 0 && result.solReceived <= (entrySol * 3)) {
           realSolReturned = result.solReceived;
-        } else if (priceChange !== undefined) {
-          realSolReturned = Math.max(0, entrySol * (1 + priceChange / 100));
+        } else {
+          // If transaction produced 0 or negative balance diff (e.g. fees), set realSolReturned to 0
+          realSolReturned = 0;
         }
       }
 
