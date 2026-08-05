@@ -1,4 +1,5 @@
 import { Keypair, PublicKey, Connection, LAMPORTS_PER_SOL, SystemProgram, Transaction } from '@solana/web3.js';
+import { getAssociatedTokenAddress, createCloseAccountInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import fs from 'fs';
 import path from 'path';
 import pino from 'pino';

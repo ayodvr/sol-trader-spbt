@@ -4,6 +4,7 @@ import {
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
+  createCloseAccountInstruction,
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
@@ -286,6 +287,8 @@ export async function ammSell(
     const tx = new Transaction();
     tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 150_000 }));
     tx.add(sellIx);
+    // Un-wrap WSOL back to native SOL atomically
+    tx.add(createCloseAccountInstruction(userQuoteTokenAccount, wallet.publicKey, wallet.publicKey, [], TOKEN_PROGRAM_ID));
     tx.feePayer = wallet.publicKey;
     const blockhash = await blockhashCache.get(connection);
     tx.recentBlockhash = blockhash;
