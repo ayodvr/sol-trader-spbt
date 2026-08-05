@@ -329,6 +329,7 @@ async function main() {
         });
       } else {
         walletManager.releaseWallet(snipeWallet.publicKey);
+        logger.warn({ mint: event.mint.toBase58(), error: result.error || 'Unknown' }, '❌ Bonding Curve Snipe execution failed');
         telegram.onError({ context: 'Snipe failed', error: result.error || 'Unknown', mint: event.mint.toBase58() });
       }
     }); // end runAnalysis
@@ -459,6 +460,7 @@ async function main() {
         exitManager.addPosition(poolInfo.baseMint.toBase58(), 0, snipeLamports, estimatedTokens, 'amm', poolInfo, rugCheck.tokenProgram);
       } else {
         walletManager.releaseWallet(snipeWallet.publicKey);
+        logger.warn({ mint: poolInfo.baseMint.toBase58(), error: result.error || 'Unknown' }, '❌ AMM Snipe execution failed');
       }
     }); // end runAnalysis
   });
