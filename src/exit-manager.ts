@@ -290,18 +290,27 @@ export class ExitManager {
     }
 
     if (result.success) {
-      let realSolReturned = result.solReceived || 0;
       const entrySol = pos.amountInLamports / 1_000_000_000;
-      if (realSolReturned <= 0) {
-        if (priceChange !== undefined && priceChange > 0) {
-          realSolReturned = entrySol * (1 + priceChange / 100);
-        } else {
-          const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
-          realSolReturned = Math.max(0, (balAfter - balBefore) / 1_000_000_000);
+      let realSolReturned = 0;
+
+      if (reason === 'rug_detected') {
+        // Rugged position: liquidity was drained by dev = 0 SOL returned
+        realSolReturned = 0;
+      } else {
+        // Check actual on-chain SOL balance change first
+        const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
+        const netSolDiff = (balAfter - balBefore) / 1_000_000_000;
+        if (netSolDiff > 0) {
+          realSolReturned = netSolDiff;
+        } else if (result.solReceived && result.solReceived > 0) {
+          realSolReturned = result.solReceived;
+        } else if (priceChange !== undefined) {
+          realSolReturned = Math.max(0, entrySol * (1 + priceChange / 100));
         }
       }
+
       const pnlSol = realSolReturned - entrySol;
-      const profitPercentNum = entrySol > 0 ? ((realSolReturned - entrySol) / entrySol) * 100 : 0;
+      const profitPercentNum = entrySol > 0 ? ((realSolReturned - entrySol) / entrySol) * 100 : -100;
       const profitStr = `${profitPercentNum >= 0 ? '+' : ''}${profitPercentNum.toFixed(1)}%`;
       const solReturnedStr = realSolReturned.toFixed(6);
 
