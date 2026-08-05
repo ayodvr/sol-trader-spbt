@@ -119,7 +119,7 @@ async function main() {
   // DRY_RUN: conservative limits to stay within Chainstack free-tier (25 RPS)
   // Live:    higher limits — paid RPC plans have the headroom for fast sniping
   let activeAnalyses = 0;
-  const MAX_CONCURRENT_ANALYSES = CONFIG.DRY_RUN ? 3 : 8;
+  const MAX_CONCURRENT_ANALYSES = CONFIG.DRY_RUN ? 3 : 4; // Max 4 concurrent token analyses to prevent Helius RPC 429 rate limit bursts
   const MAX_QUEUE_DEPTH = CONFIG.DRY_RUN ? 20 : 100;
   // ─── Max open positions cap (DRY_RUN=10, live=unlimited) ───
   const MAX_OPEN_POSITIONS = CONFIG.DRY_RUN ? 10 : 9999;

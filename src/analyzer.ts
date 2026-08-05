@@ -16,6 +16,29 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const devHistoryCache = new Map<string, { devScore: number; expiresAt: number }>();
 const DEV_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
+/**
+ * Helper to wrap RPC calls with automatic exponential backoff for Helius free tier (10 RPS limit).
+ */
+async function withRpcRetry<T>(fn: () => Promise<T>, maxRetries: number = 3, initialDelayMs: number = 350): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      attempt++;
+      const msg = err?.message || err?.toString() || '';
+      const is429 = msg.includes('429') || err?.status === 429 || err?.response?.status === 429;
+      if (is429 && attempt <= maxRetries) {
+        const delay = initialDelayMs * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 150);
+        logger.debug({ attempt, delay }, '⚡ Helius RPC 429 rate limit hit — retrying with backoff');
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 export class RugAnalyzer {
   private connection: Connection;
 
@@ -54,7 +77,7 @@ export class RugAnalyzer {
       let tokenProgram = TOKEN_PROGRAM_ID;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          mintInfo = await getMint(this.connection, mint, 'confirmed', tokenProgram);
+          mintInfo = await withRpcRetry(() => getMint(this.connection, mint, 'confirmed', tokenProgram));
           break;
         } catch (mintErr: any) {
           const isOwnerError = mintErr?.name === 'TokenInvalidAccountOwnerError' ||
@@ -83,8 +106,6 @@ export class RugAnalyzer {
       result.tokenProgram = tokenProgram.toBase58();
       logger.debug({ mint: mintStr, tokenProgram: result.tokenProgram }, '🔍 Token program detected');
 
-
-
       if (mintInfo.mintAuthority === null) {
         result.mintAuthorityRevoked = true;
         logger.debug({ mint: mintStr }, '✅ Mint authority revoked');
@@ -106,7 +127,7 @@ export class RugAnalyzer {
       }
 
       // ─── Check 2: Tax estimation via bonding curve ───────────
-      const curveAccount = await this.connection.getAccountInfo(bondingCurveOrPool);
+      const curveAccount = await withRpcRetry(() => this.connection.getAccountInfo(bondingCurveOrPool));
       if (curveAccount) {
         const view = new DataView(curveAccount.data.buffer);
 
@@ -231,7 +252,7 @@ export class RugAnalyzer {
     count: number
   ): Promise<Array<[PublicKey, bigint]>> {
     try {
-      const accounts = await this.connection.getTokenLargestAccounts(mint);
+      const accounts = await withRpcRetry(() => this.connection.getTokenLargestAccounts(mint));
       return accounts.value
         .slice(0, count)
         .map(acc => [acc.address, BigInt(acc.amount)] as [PublicKey, bigint]);
