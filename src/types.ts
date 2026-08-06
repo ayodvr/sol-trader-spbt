@@ -23,6 +23,7 @@ export interface RugCheckResult {
   devScore?: number;
   socialScore?: number;
   tokenProgram?: string;   // 'TokenkegQfe...' = SPL, 'TokenzQdBNb...' = Token-2022
+  creator?: string;        // Resolved real creator wallet (bonding-curve-derived for AMM, see analyzer.ts)
 }
 
 export interface ExitTriggers {

@@ -4,6 +4,7 @@ import fs from 'fs';
 
 import { CONFIG } from '../config.js';
 import { RugCheckResult } from './types.js';
+import { deriveBondingCurve } from './utils.js';
 import pino from 'pino';
 import axios from 'axios';
 
@@ -85,6 +86,26 @@ export class RugAnalyzer {
   async analyze(mint: PublicKey, bondingCurveOrPool: PublicKey, creator?: PublicKey, isAmm: boolean = false): Promise<RugCheckResult> {
     const mintStr = mint.toBase58();
 
+    // ─── Resolve the REAL creator ───────────────────────────────────────────
+    // For the AMM track, the `creator` passed in comes from PumpSwap's pool account — but that
+    // account's "creator" field is Pool::creator, a migration-authority PDA created by the
+    // migrate instruction, NOT the original deployer. The actual deployer (who receives fees)
+    // is a separate field, Pool::coin_creator, which we're not parsing here. Rather than guess
+    // at that field's byte offset, derive the real creator from the token's underlying bonding
+    // curve account instead — every graduated token still has one on-chain, and this exact byte
+    // offset (32-64) is already proven correct elsewhere in this codebase (sell.ts's
+    // readCreator(), used successfully on every bonding-curve sell all session).
+    let effectiveCreator = creator;
+    if (isAmm) {
+      try {
+        const bondingCurve = deriveBondingCurve(mint);
+        const curveAcc = await withRpcRetry(() => this.connection.getAccountInfo(bondingCurve));
+        if (curveAcc && curveAcc.data.length >= 64) {
+          effectiveCreator = new PublicKey(curveAcc.data.subarray(32, 64));
+        }
+      } catch { /* fall back to whatever was passed in, if anything */ }
+    }
+
     const result: RugCheckResult = {
       safe: false,
       score: 100,
@@ -98,13 +119,14 @@ export class RugAnalyzer {
       hasSocials: false,
       devScore: 100,
       socialScore: 0,
+      creator: effectiveCreator?.toBase58(),
     };
 
     // ─── Hard block: creator previously confirmed to have rugged us ───────────
     // Checked before anything else — no point spending RPC/Helius calls analyzing a token from
     // a wallet we already have first-hand evidence on. No cache TTL on this one; it's permanent
     // until manually cleared (delete the entry from rug-db.json).
-    const creatorStr = creator?.toBase58();
+    const creatorStr = effectiveCreator?.toBase58();
     if (creatorStr && (this.rugDb.get(creatorStr) || 0) >= RUG_BLACKLIST_STRIKES) {
       result.safe = false;
       result.score = 0;
@@ -315,14 +337,14 @@ export class RugAnalyzer {
       }
 
       // ─── Check 5: Developer History via Helius (Cached) ───────────
-      if (creator) {
-        const devScore = await this.checkDevHistory(creator.toBase58());
+      if (effectiveCreator) {
+        const devScore = await this.checkDevHistory(effectiveCreator.toBase58());
         result.devScore = devScore;
         if (devScore < CONFIG.MIN_DEV_HISTORY_SCORE) {
           const penalty = Math.floor((CONFIG.MIN_DEV_HISTORY_SCORE - devScore) / 5) * 10; // Up to -100 points for serial ruggers
           result.score -= penalty;
           result.flags.push(`BAD_DEV_HISTORY: ${devScore}`);
-          logger.warn({ creator: creator.toBase58().slice(0, 8), devScore, penalty }, '⚠️ Suspicious dev history');
+          logger.warn({ creator: effectiveCreator.toBase58().slice(0, 8), devScore, penalty }, '⚠️ Suspicious dev history');
         }
       }
 

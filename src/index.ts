@@ -450,7 +450,7 @@ async function main() {
           }
         });
         exitManagers.push(exitManager);
-        exitManager.addPosition(event.mint.toBase58(), event.slot, CONFIG.SNIPE_AMOUNT_LAMPORTS, result.tokenBalance || 0n, 'bonding_curve', undefined, rugCheck.tokenProgram, event.creator.toBase58());
+        exitManager.addPosition(event.mint.toBase58(), event.slot, CONFIG.SNIPE_AMOUNT_LAMPORTS, result.tokenBalance || 0n, 'bonding_curve', undefined, rugCheck.tokenProgram, rugCheck.creator ?? event.creator.toBase58());
 
         telegram.onSnipe({
           mint: event.mint.toBase58(),
@@ -649,7 +649,10 @@ async function main() {
         // Use the real post-trade balance when available (falls back to the pre-trade
         // estimate only if the balance fetch itself failed) — selling against a stale
         // pre-trade estimate can under/over-shoot the actual on-chain balance.
-        exitManager.addPosition(poolInfo.baseMint.toBase58(), 0, snipeLamports, result.tokenBalance ?? estimatedTokens, 'amm', poolInfo, rugCheck.tokenProgram, poolInfo.creator.toBase58());
+        // Use rugCheck.creator (bonding-curve-derived — see analyzer.ts), NOT poolInfo.creator:
+        // the pool account's own "creator" field is a migration-authority PDA, not the real
+        // deployer, which is what fed the dev-history check and must feed the blacklist too.
+        exitManager.addPosition(poolInfo.baseMint.toBase58(), 0, snipeLamports, result.tokenBalance ?? estimatedTokens, 'amm', poolInfo, rugCheck.tokenProgram, rugCheck.creator ?? poolInfo.creator.toBase58());
       } else {
         walletManager.releaseWallet(snipeWallet.publicKey);
         logger.warn({ mint: poolInfo.baseMint.toBase58(), error: result.error || 'Unknown' }, '❌ AMM Snipe execution failed');
