@@ -523,9 +523,13 @@ async function main() {
 
   // ─── Periodic wallet maintenance (every 5 minutes) ───
   setInterval(async () => {
-    await walletManager.sweepWallets(masterKeypair, 1.0, 0.3); // 🧹 Sweep profits > 1.0 SOL back to master (keep 0.3)
-    await walletManager.refillWallets(masterKeypair, 0.1, 0.3); // ⛽ Refill wallets < 0.1 SOL up to 0.3
-    walletManager.saveState('./wallet-state.json');
+    try {
+      await walletManager.sweepWallets(masterKeypair, 1.0, 0.3); // 🧹 Sweep profits > 1.0 SOL back to master (keep 0.3)
+      await walletManager.refillWallets(masterKeypair, 0.1, 0.3); // ⛽ Refill wallets < 0.1 SOL up to 0.3
+      walletManager.saveState('./wallet-state.json');
+    } catch (err: any) {
+      logger.warn({ err: err.message }, '⚠️ Wallet maintenance tick failed — will retry next interval');
+    }
 
     if (stats.totalLatencyMs.length > 0) {
       const avg = stats.totalLatencyMs.reduce((a, b) => a + b, 0) / stats.totalLatencyMs.length;
