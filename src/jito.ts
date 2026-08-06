@@ -62,27 +62,26 @@ async function executeSubmitJitoBundle(
   connection?: any
 ): Promise<string | null> {
   try {
-    // Add tip instruction to the last transaction if not already present
-    const targetTx = transactions[transactions.length - 1];
-    const hasTip = targetTx.instructions.some(ix =>
-      JITO_TIP_ACCOUNTS.some(addr => ix.keys.some(k => k.pubkey.toBase58() === addr))
-    );
+    // Add tip instruction to the last transaction
+    const safeTipLamports = Math.max(100_000, Math.floor(tipLamports || 100_000));
+    const tipAccount = getRandomTipAccount();
+    const tipIx = SystemProgram.transfer({
+      fromPubkey: signers[0].publicKey,
+      toPubkey: tipAccount,
+      lamports: safeTipLamports,
+    });
+    // Explicitly guarantee write-lock flag for Jito auction engine
+    tipIx.keys.forEach(k => {
+      if (k.pubkey.equals(tipAccount)) {
+        k.isWritable = true;
+      }
+    });
 
-    if (!hasTip) {
-      const safeTipLamports = Math.max(100_000, Math.floor(tipLamports || 100_000));
-      const tipAccount = getRandomTipAccount();
-      const tipIx = SystemProgram.transfer({
-        fromPubkey: signers[0].publicKey,
-        toPubkey: tipAccount,
-        lamports: safeTipLamports,
-      });
-      targetTx.add(tipIx);
-    }
+    const targetTx = transactions[transactions.length - 1];
+    targetTx.add(tipIx);
 
     // Serialize all transactions to base58 (required by Jito JSON-RPC API)
-    // Force reset tx.signatures to ensure newly added tip instruction is compiled into message header
     const serializedTxs = transactions.map((tx) => {
-      tx.signatures = [];
       tx.sign(...signers);
       return bs58.encode(tx.serialize());
     });
@@ -204,11 +203,11 @@ export async function submitJitoBundle(
 ): Promise<string | null> {
   if (isSell) {
     const task = jitoSellQueueChain.then(() => executeSubmitJitoBundle(transactions, signers, tipLamports, connection));
-    jitoSellQueueChain = task.catch(() => {});
+    jitoSellQueueChain = task.catch(() => { });
     return task;
   }
   const task = jitoQueueChain.then(() => executeSubmitJitoBundle(transactions, signers, tipLamports, connection));
-  jitoQueueChain = task.catch(() => {});
+  jitoQueueChain = task.catch(() => { });
   return task;
 }
 
