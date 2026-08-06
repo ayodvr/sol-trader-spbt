@@ -243,12 +243,13 @@ async function main() {
         logger.info(`Updated trade size to ${rawSize} SOL`);
       }
 
-      // Handle Take Profit
+      // Handle Take Profit — now treated as % (e.g. 35 = 35% gain), not multiplier
       if (updates.EXIT_PROFIT_PERCENT) {
         CONFIG.EXIT_PROFIT_PERCENT = parseInt(updates.EXIT_PROFIT_PERCENT);
       } else if (updates.TAKE_PROFIT_MULTIPLIER) {
-        CONFIG.EXIT_PROFIT_PERCENT = Math.floor(parseFloat(updates.TAKE_PROFIT_MULTIPLIER) * 100);
-        logger.info(`Updated Take Profit target to ${CONFIG.EXIT_PROFIT_PERCENT}% (${updates.TAKE_PROFIT_MULTIPLIER}x)`);
+        // Dashboard now sends TAKE_PROFIT_MULTIPLIER in % (e.g. "35" = 35%)
+        CONFIG.EXIT_PROFIT_PERCENT = parseInt(updates.TAKE_PROFIT_MULTIPLIER);
+        logger.info(`Updated Take Profit target to ${CONFIG.EXIT_PROFIT_PERCENT}%`);
       }
 
       // Handle Stop Loss
@@ -346,6 +347,9 @@ async function main() {
           stats.successfulExits++;
           stats.totalPnl += pnlSol;
           walletManager.releaseWallet(snipeWallet.publicKey);
+          // ✅ Fix 6: Remove this manager from the array once its position closes (memory leak fix)
+          const idx = exitManagers.indexOf(exitManager);
+          if (idx !== -1) exitManagers.splice(idx, 1);
           if (CONFIG.DRY_RUN) {
             walletManager.modifyVirtualBalance(snipeWallet.publicKey, CONFIG.SNIPE_AMOUNT_LAMPORTS + (pnlSol * 1_000_000_000));
           }
@@ -495,6 +499,9 @@ async function main() {
           stats.successfulExits++;
           stats.totalPnl += pnlSol;
           walletManager.releaseWallet(snipeWallet.publicKey); // Fix 7: release wallet after exit
+          // ✅ Fix 6: Remove this manager from the array once its position closes (memory leak fix)
+          const idx = exitManagers.indexOf(exitManager);
+          if (idx !== -1) exitManagers.splice(idx, 1);
           if (CONFIG.DRY_RUN) {
             walletManager.modifyVirtualBalance(snipeWallet.publicKey, snipeLamports + (pnlSol * 1_000_000_000));
           }

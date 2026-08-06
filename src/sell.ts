@@ -171,9 +171,9 @@ export async function sell(
     const blockhash = await blockhashCache.get(connection);
     tx.recentBlockhash = blockhash;
 
-    // ─── Submit via Jito ───
+    // ─── Submit via Jito sell queue (separate from buy queue — Fix 4) ───
     const tipLamports = TipCalculator.calculateTip(0, isEmergency);
-    const bundleId = await submitJitoBundle([tx], [wallet], tipLamports, connection);
+    const bundleId = await submitJitoBundle([tx], [wallet], tipLamports, connection, true);
     if (!bundleId) throw new Error('Failed to get bundle ID from Jito');
 
     const status = await waitForBundleConfirmation(bundleId, 30, 500, connection);

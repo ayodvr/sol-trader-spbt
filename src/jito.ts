@@ -53,6 +53,7 @@ function getJitoEndpoint(): string {
 }
 
 let jitoQueueChain: Promise<any> = Promise.resolve();
+let jitoSellQueueChain: Promise<any> = Promise.resolve(); // ✅ Fix 4: Separate queue so sell exits never block behind buy cooldowns
 
 async function executeSubmitJitoBundle(
   transactions: Transaction[],
@@ -191,13 +192,20 @@ async function executeSubmitJitoBundle(
  * Submit a bundle of transactions to Jito's block engine.
  * All transactions execute atomically and in order.
  * Uses a serial promise queue to strictly enforce 1.1s spacing between requests.
+ * Sell transactions use a SEPARATE queue so they are never blocked behind buy cooldowns.
  */
 export async function submitJitoBundle(
   transactions: Transaction[],
   signers: Keypair[],
   tipLamports: number = CONFIG.JITO_TIP_LAMPORTS,
-  connection?: any
+  connection?: any,
+  isSell: boolean = false // ✅ Fix 4: route sells through separate queue
 ): Promise<string | null> {
+  if (isSell) {
+    const task = jitoSellQueueChain.then(() => executeSubmitJitoBundle(transactions, signers, tipLamports, connection));
+    jitoSellQueueChain = task.catch(() => {});
+    return task;
+  }
   const task = jitoQueueChain.then(() => executeSubmitJitoBundle(transactions, signers, tipLamports, connection));
   jitoQueueChain = task.catch(() => {});
   return task;

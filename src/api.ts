@@ -104,6 +104,7 @@ export function startApi(state: BotState, controls: BotControls) {
       tradeHistory: state.tradeHistory.slice(0, 20),
       walletStats: state.walletStats(),
       recentLogs: state.recentLogs,
+      totalPnl: state.stats.totalPnl, // ✅ Expose authoritative running total directly
     }, jsonReplacer);
     for (const client of sseClients) {
       try {
@@ -244,7 +245,8 @@ export function startApi(state: BotState, controls: BotControls) {
       PAPER_BALANCE_SOL: '1.0',
       TRADE_SIZE_SOL: (CONFIG.SNIPE_AMOUNT_LAMPORTS / 1_000_000_000).toString(),
       MAX_OPEN_POSITIONS: '5',
-      TAKE_PROFIT_MULTIPLIER: (CONFIG.EXIT_PROFIT_PERCENT / 100).toString(),
+      // ✅ Fix 7: Return take profit as % (e.g. "35" = 35%), not multiplier ("0.35")
+      TAKE_PROFIT_MULTIPLIER: CONFIG.EXIT_PROFIT_PERCENT.toString(),
       STOP_LOSS_PERCENT: CONFIG.EXIT_DRAWDOWN_PERCENT.toString(),
       TRAILING_STOP_PERCENT: CONFIG.TRAILING_STOP_PERCENT.toString(),
       SIGNAL_SCORE_THRESHOLD: '30',
@@ -269,7 +271,8 @@ export function startApi(state: BotState, controls: BotControls) {
       if (updates.PAPER_TRADING !== undefined) envUpdates.DRY_RUN = updates.PAPER_TRADING;
       if (updates.TRADE_SIZE_SOL) envUpdates.SNIPE_AMOUNT_SOL = updates.TRADE_SIZE_SOL;
       if (updates.TAKE_PROFIT_MULTIPLIER) {
-        envUpdates.EXIT_PROFIT_PERCENT = Math.floor(parseFloat(updates.TAKE_PROFIT_MULTIPLIER) * 100).toString();
+        // ✅ Fix 7: Dashboard now sends TAKE_PROFIT_MULTIPLIER in % (e.g. "35" = 35%)
+        envUpdates.EXIT_PROFIT_PERCENT = updates.TAKE_PROFIT_MULTIPLIER;
       }
       if (updates.STOP_LOSS_PERCENT) envUpdates.EXIT_DRAWDOWN_PERCENT = updates.STOP_LOSS_PERCENT;
 

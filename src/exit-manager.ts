@@ -154,8 +154,26 @@ export class ExitManager {
       const isComplete = curveAccount.data.length > 88 ? curveAccount.data[88] !== 0 : false;
 
       if (isComplete || virtualTokenReserves < 1_000_000n) {
-        // Curve finished/graduated — cap simulated price to max 10x (1000% gain) to avoid division-by-dust math anomaly
-        currentPrice = pos.entryPrice > 0 ? pos.entryPrice * 10 : 0;
+        // ✅ Fix 3: Token graduated to PumpSwap AMM — don't fake a 10x price, switch to real AMM sell
+        logger.info({ mint: pos.mint }, '🎓 Bonding curve completed — token graduated, switching to AMM sell path');
+        if (!pos.poolInfo) {
+          try {
+            const ammPool = await fetchAmmPool(this.connection, mintKey);
+            if (ammPool) {
+              pos.poolInfo = ammPool;
+              pos.source = 'amm';
+              logger.info({ mint: pos.mint }, '✅ AMM pool found for graduated token — executing AMM exit');
+            }
+          } catch { /* pool not yet indexed — wait for next tick */ }
+        } else {
+          pos.source = 'amm';
+        }
+        if (pos.source === 'amm' && pos.poolInfo) {
+          await this.executeExit(pos, 'take_profit', 0);
+        } else {
+          logger.debug({ mint: pos.mint }, '⏳ AMM pool not yet indexed for graduated token — retrying next tick');
+        }
+        return;
       } else {
         currentPrice = virtualTokenReserves > 0n
           ? Number(virtualSolReserves * 1_000_000_000n / virtualTokenReserves)
@@ -173,6 +191,12 @@ export class ExitManager {
       await this.executeExit(pos, 'rug_detected', -100);
       return;
     }
+
+    // ✅ Track live price on position so API/dashboard can show unrealised P&L
+    pos.currentPrice = currentPrice;
+    pos.currentPriceChangePercent = pos.entryPrice > 0
+      ? ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100
+      : 0;
 
     // Update high-water mark (for trailing stop)
     if (currentPrice > pos.highWaterMark) {
@@ -297,18 +321,24 @@ export class ExitManager {
         // Rugged position: liquidity was drained by dev = 0 SOL returned
         realSolReturned = 0;
       } else {
-        // Wait 1.5s for block indexing
-        await new Promise(r => setTimeout(r, 1500));
-        const balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
+        // ✅ Fix 2: Retry balance check up to 5x (1s each) — Jito tip is deducted in same block
+        // so a single 1.5s wait often sees balAfter <= balBefore. Retrying catches it once confirmed.
+        let balAfter = balBefore;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          await new Promise(r => setTimeout(r, 1000));
+          balAfter = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
+          if (balAfter !== balBefore) break;
+        }
         const netSolDiff = (balAfter - balBefore) / 1_000_000_000;
         if (netSolDiff > 0) {
           realSolReturned = netSolDiff;
         } else if (priceChange !== undefined) {
-          // Calculate expected SOL return from exit price (e.g. +35% = 0.0675 SOL, -30% = 0.035 SOL)
+          // Balance diff still unreliable (Jito tip in same wallet) — use price-based estimate
+          // but apply 80% haircut to account for slippage, fees, and tip
           const expectedSol = entrySol * (1 + priceChange / 100);
-          realSolReturned = Math.min(entrySol * 4, Math.max(0.001, expectedSol));
+          realSolReturned = Math.min(entrySol * 2, Math.max(0, expectedSol * 0.80));
         } else {
-          realSolReturned = entrySol;
+          realSolReturned = entrySol * 0.90; // Fallback: assume 10% fees/slippage
         }
       }
 
@@ -353,26 +383,38 @@ export class ExitManager {
         mint: pos.mint,
       });
 
-      // Retry once after 2 seconds with full emergency mode
+      // ✅ Fix 1: Read real wallet balance after retry — never hardcode +50%
       setTimeout(async () => {
         let retry: { success: boolean; error?: string };
 
         if (pos.source === 'amm' && pos.poolInfo) {
-          retry = await ammSell(this.connection, this.wallet, pos.poolInfo, pos.tokenBalance, 100, false, true, tokenProgramId);
+          retry = await ammSell(this.connection, this.wallet, pos.poolInfo!, pos.tokenBalance, 100, false, true, tokenProgramId);
         } else {
           retry = await sell(this.connection, this.wallet, mintPubkey, pos.tokenBalance, 0n, true, tokenProgramId);
         }
 
         if (retry.success) {
           logger.info({ mint: pos.mint }, '✅ Exit succeeded on retry');
+          // Measure real balance change — retry may have landed in a later block
+          let balAfterRetry = balBefore;
+          for (let attempt = 0; attempt < 5; attempt++) {
+            await new Promise(r => setTimeout(r, 1000));
+            balAfterRetry = await this.connection.getBalance(this.wallet.publicKey).catch(() => balBefore);
+            if (balAfterRetry !== balBefore) break;
+          }
+          const netDiff = (balAfterRetry - balBefore) / 1_000_000_000;
+          const realSolReturned = netDiff > 0 ? netDiff : pos.amountInLamports / 1_000_000_000 * 0.70;
+          const pnlSol = realSolReturned - (pos.amountInLamports / 1_000_000_000);
+          const pnlPct = pos.amountInLamports > 0
+            ? ((pnlSol / (pos.amountInLamports / 1_000_000_000)) * 100).toFixed(1)
+            : '0.0';
           if (this.onExitSuccess) {
-            const pnlSol = (pos.amountInLamports / 1_000_000_000) * 0.5; // Estimated baseline return or profit
             this.onExitSuccess(pnlSol, {
               mint: pos.mint,
               boughtAt: pos.amountInLamports / 1_000_000_000,
-              soldAt: (pos.amountInLamports / 1_000_000_000) + pnlSol,
+              soldAt: realSolReturned,
               pnlSol,
-              pnlPercent: '+50.0%',
+              pnlPercent: `${pnlSol >= 0 ? '+' : ''}${pnlPct}%`,
               reason,
               timestamp: Date.now()
             });

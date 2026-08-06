@@ -43,6 +43,8 @@ export interface Position {
   poolInfo?: AmmPoolInfo;          // Set if source === 'amm'
   highWaterMark: number;           // Highest price seen (for trailing stop)
   tokenProgram?: string;           // SPL or Token-2022 program ID
+  currentPrice?: number;           // Last observed price (updated each monitor tick)
+  currentPriceChangePercent?: number; // Unrealised PnL % vs entry (updated each tick)
 }
 
 export interface TradeHistoryEntry {
