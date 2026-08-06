@@ -8,6 +8,7 @@ import { ammSell, fetchAmmPool } from './pumpswap.js';
 import { deriveBondingCurve, decodePrivateKey } from './utils.js';
 import { TelegramNotifier } from './telegram.js';
 import { Position, TradeHistoryEntry } from './types.js';
+import { WsPoolMonitor } from './ws-pool-monitor.js';
 import pino from 'pino';
 
 const logger = pino({ name: 'exit-manager' });
@@ -19,12 +20,21 @@ export class ExitManager {
   private activeMonitors: Map<string, ReturnType<typeof setInterval>> = new Map();
   private telegram?: TelegramNotifier;
   private onExitSuccess?: (pnlSol: number, tradeInfo?: TradeHistoryEntry) => void;
+  private wsMonitor?: WsPoolMonitor;
 
   constructor(wallet: Keypair, telegram?: TelegramNotifier, onExitSuccess?: (pnlSol: number, tradeInfo?: TradeHistoryEntry) => void) {
     this.connection = new Connection(CONFIG.RPC_URL, 'confirmed');
     this.wallet = wallet;
     this.telegram = telegram;
     this.onExitSuccess = onExitSuccess;
+  }
+
+  /**
+   * Attach a shared WsPoolMonitor so AMM positions use event-driven exit checks
+   * instead of polling. Call once after construction, before adding positions.
+   */
+  setWsMonitor(monitor: WsPoolMonitor): void {
+    this.wsMonitor = monitor;
   }
 
   getPositions(): Position[] {
@@ -59,13 +69,21 @@ export class ExitManager {
     };
     this.positions.set(mint, position);
     this.startMonitoring(mint);
+
+    // Subscribe to real-time WS pool updates if available (AMM only)
+    if (source === 'amm' && poolInfo && this.wsMonitor) {
+      const poolAddr = poolInfo.poolAddress.toBase58();
+      this.wsMonitor.subscribeToPool(poolAddr);
+      logger.info({ mint, pool: poolAddr }, '📡 WS pool subscription active — exit checks event-driven');
+    }
+
     logger.info({ mint, entryPrice: entryPrice.toFixed(2), source }, '🎯 Position tracked, exit monitor active');
   }
 
-  // How often to poll price: 10s in dry-run, 200ms in live for fast exits
-  // 200ms = 5x faster than 1s — catches slow dumps at -22% instead of -80%
-  // Still safe for Alchemy: 3 positions × 5/s = 15 RPC calls/s × 15 CU = 225 CU/s (well under 10,000 CU/s limit)
-  private readonly POLL_INTERVAL_MS = CONFIG.DRY_RUN ? 10_000 : 200;
+  // Fallback polling interval. WS event-driven checks fire instantly on pool changes.
+  // This poll is the safety net in case WS misses an event or disconnects.
+  // AMM positions: 2s fallback (WS handles real-time). Dry-run: 10s.
+  private readonly POLL_INTERVAL_MS = CONFIG.DRY_RUN ? 10_000 : 2_000;
   // How many consecutive "pool not found" ticks before force-closing a stuck position
   private poolMissCount: Map<string, number> = new Map();
 
@@ -473,8 +491,34 @@ export class ExitManager {
     const interval = this.activeMonitors.get(mint);
     if (interval) clearInterval(interval);
     this.activeMonitors.delete(mint);
+    // Unsubscribe from WS pool updates
+    const pos = this.positions.get(mint);
+    if (pos?.poolInfo && this.wsMonitor) {
+      this.wsMonitor.unsubscribePool(pos.poolInfo.poolAddress.toBase58());
+    }
     this.positions.delete(mint);
     this.poolMissCount.delete(mint);
+  }
+
+  /**
+   * Called by WsPoolMonitor when a pool account changes (i.e., any trade occurs).
+   * Updates cached reserves and immediately checks exit conditions — no polling delay.
+   */
+  async handleWsPoolUpdate(poolAddress: string, baseReserves: bigint, quoteReserves: bigint): Promise<void> {
+    for (const [, pos] of this.positions) {
+      if (pos.exitTriggered) continue;
+      if (pos.source !== 'amm' || !pos.poolInfo) continue;
+      if (pos.poolInfo.poolAddress.toBase58() !== poolAddress) continue;
+
+      // Inject fresh reserves directly — no RPC call needed
+      pos.poolInfo = { ...pos.poolInfo, baseReserves, quoteReserves };
+      try {
+        await this.checkExitConditions(pos);
+      } catch (err: any) {
+        logger.debug({ err: err.message }, 'WS-triggered exit check error');
+      }
+      break;
+    }
   }
 
   async forceExit(mint: string): Promise<boolean> {

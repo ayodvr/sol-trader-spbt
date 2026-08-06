@@ -14,6 +14,7 @@ import { ExitManager } from './exit-manager.js';
 import { WalletManager } from './multi-wallet.js';
 import { TelegramNotifier } from './telegram.js';
 import { watchAmmPoolCreations, ammBuy, AmmPoolInfo } from './pumpswap.js';
+import { WsPoolMonitor } from './ws-pool-monitor.js';
 import { decodePrivateKey } from './utils.js';
 import { NewTokenEvent } from './types.js';
 import { startApi } from './api.js';
@@ -142,6 +143,17 @@ async function main() {
 
   // ─── API Integration & Trade History Persistence ───
   const exitManagers: ExitManager[] = [];
+
+  // Shared WebSocket pool monitor — real-time exit checks on every pool trade (free, uses existing WS_URL)
+  const wsPoolMonitor = new WsPoolMonitor(
+    CONFIG.WS_URL,
+    async (poolAddress, baseReserves, quoteReserves) => {
+      for (const em of exitManagers) {
+        await em.handleWsPoolUpdate(poolAddress, baseReserves, quoteReserves);
+      }
+    }
+  );
+  logger.info({ wsUrl: CONFIG.WS_URL.slice(0, 40) + '...' }, '📡 WS pool monitor starting — event-driven exits active');
   const TRADE_HISTORY_FILE = './trade-history.json';
   const tradeHistory: any[] = [];
 
@@ -560,6 +572,8 @@ async function main() {
           }
         });
         exitManagers.push(exitManager);
+        // Attach WS monitor for real-time event-driven exit checks (free, no gRPC needed)
+        exitManager.setWsMonitor(wsPoolMonitor);
         // Fix 2: pass source='amm' + poolInfo so exit manager routes sell correctly
         exitManager.addPosition(poolInfo.baseMint.toBase58(), 0, snipeLamports, estimatedTokens, 'amm', poolInfo, rugCheck.tokenProgram);
       } else {
