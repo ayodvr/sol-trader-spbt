@@ -206,14 +206,52 @@ export class ExitManager {
     const priceChangePercent = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
 
     // Exit Signal 1: Take Profit
+    // ✅ Guard: verify real AMM output is profitable BEFORE firing TP.
+    // Spot price can show +35% but selling a large position into a thin pool
+    // causes massive price impact, resulting in actual SOL received < entry.
+    // Use constant-product formula: solOut = (quoteReserves * tokenBalance) / (baseReserves + tokenBalance)
     if (priceChangePercent >= CONFIG.EXIT_PROFIT_PERCENT) {
-      logger.info({
-        mint: pos.mint,
-        gain: `${priceChangePercent.toFixed(1)}%`,
-        target: `${CONFIG.EXIT_PROFIT_PERCENT}%`,
-      }, '💰 TAKE PROFIT');
-      await this.executeExit(pos, 'take_profit', priceChangePercent);
-      return;
+      const entrySol = pos.amountInLamports / 1_000_000_000;
+      let shouldFireTP = true;
+
+      if (pos.source === 'amm' && pos.poolInfo) {
+        const { baseReserves, quoteReserves } = pos.poolInfo;
+        if (baseReserves > 0n && quoteReserves > 0n && pos.tokenBalance > 0n) {
+          // Constant product output formula: dx·y / (x + dx), then apply ~1% PumpSwap fee
+          const solOutLamports = (quoteReserves * pos.tokenBalance) / (baseReserves + pos.tokenBalance);
+          const expectedSolOut = Number(solOutLamports) / 1_000_000_000 * 0.99; // 1% fee haircut
+
+          if (expectedSolOut <= entrySol) {
+            // Price is up but price impact makes the exit unprofitable — hold for now
+            logger.debug({
+              mint: pos.mint,
+              spotGain: `${priceChangePercent.toFixed(1)}%`,
+              expectedSolOut: expectedSolOut.toFixed(6),
+              entrySol: entrySol.toFixed(6),
+            }, '⚠️ TP spot triggered but AMM price impact too high — holding for better pool depth');
+            shouldFireTP = false;
+          } else {
+            logger.info({
+              mint: pos.mint,
+              gain: `${priceChangePercent.toFixed(1)}%`,
+              target: `${CONFIG.EXIT_PROFIT_PERCENT}%`,
+              expectedSolOut: expectedSolOut.toFixed(6),
+              entrySol: entrySol.toFixed(6),
+            }, '💰 TAKE PROFIT');
+          }
+        }
+      } else {
+        logger.info({
+          mint: pos.mint,
+          gain: `${priceChangePercent.toFixed(1)}%`,
+          target: `${CONFIG.EXIT_PROFIT_PERCENT}%`,
+        }, '💰 TAKE PROFIT');
+      }
+
+      if (shouldFireTP) {
+        await this.executeExit(pos, 'take_profit', priceChangePercent);
+        return;
+      }
     }
 
     // Exit Signal 2: Stop Loss (from entry)
