@@ -54,6 +54,11 @@ export class GrpcWatcher {
   private grpcEndpoint: string;
   private grpcToken: string;
 
+  /** Pool addresses to monitor for exit conditions (account change = any trade) */
+  private trackedPools: Set<string> = new Set();
+  /** Called on every gRPC account notification for tracked pools */
+  private onPoolUpdate: ((address: string, base: bigint, quote: bigint) => void) | null = null;
+
   constructor(endpoint?: string, token?: string) {
     this.grpcEndpoint = endpoint || process.env.GRPC_ENDPOINT || '';
     this.grpcToken = token || process.env.GRPC_TOKEN || '';
@@ -81,6 +86,64 @@ export class GrpcWatcher {
     this.isRunning = true;
     this.reconnectAttempts = 0;
     await this.connect();
+  }
+
+  /**
+   * Register a callback for pool account change notifications.
+   * Called on every gRPC account notification with fresh reserves (~30ms latency).
+   */
+  setPoolUpdateCallback(cb: (address: string, base: bigint, quote: bigint) => void): void {
+    this.onPoolUpdate = cb;
+  }
+
+  /**
+   * Subscribe to a pool account via gRPC — ~30ms notification on any trade/rug.
+   * Dynamically updates the live stream without reconnecting.
+   */
+  addPoolMonitor(poolAddress: string): void {
+    if (this.trackedPools.has(poolAddress)) return;
+    this.trackedPools.add(poolAddress);
+    this.updatePoolSubscription();
+    logger.debug({ pool: poolAddress.slice(0, 8) + '...' }, '⚡ gRPC pool monitor added');
+  }
+
+  /**
+   * Unsubscribe from a pool account when its position closes.
+   */
+  removePoolMonitor(poolAddress: string): void {
+    if (!this.trackedPools.delete(poolAddress)) return;
+    this.updatePoolSubscription();
+    logger.debug({ pool: poolAddress.slice(0, 8) + '...' }, '⚡ gRPC pool monitor removed');
+  }
+
+  /**
+   * Push updated pool list to the live gRPC stream.
+   * Yellowstone merges subscription updates — existing tx subscriptions are preserved.
+   */
+  private updatePoolSubscription(): void {
+    if (!this.stream || !this.isRunning) return;
+    const pools = Array.from(this.trackedPools);
+    try {
+      this.stream.write({
+        slots: {},
+        accounts: pools.length > 0 ? {
+          pool_exit_monitor: {
+            account: pools,
+            owner: [],
+            filters: [],
+          }
+        } : {},
+        transactions: {},
+        transactionsStatus: {},
+        blocks: {},
+        blocksMeta: {},
+        entry: {},
+        accountsDataSlice: [],
+        commitment: 0,
+      });
+    } catch (err: any) {
+      logger.debug({ err: err.message }, 'updatePoolSubscription write failed (stream closed)');
+    }
   }
 
   private async connect(): Promise<void> {
@@ -133,6 +196,12 @@ export class GrpcWatcher {
       logger.info('✅ Yellowstone gRPC connected and subscribed');
       this.reconnectAttempts = 0;
       this.startHealthCheck();
+
+      // Re-subscribe to any pools we were monitoring before the reconnect
+      if (this.trackedPools.size > 0) {
+        this.updatePoolSubscription();
+        logger.info({ pools: this.trackedPools.size }, '⚡ Re-subscribed to pool exit monitors after reconnect');
+      }
 
     } catch (err: any) {
       logger.error({ 
@@ -197,6 +266,28 @@ export class GrpcWatcher {
         if (hash) {
           blockhashCache.set(hash);
         }
+        return;
+      }
+      // ─── Pool account change notification (for exit monitoring) ───
+      if (data.account && this.onPoolUpdate) {
+        const acc = data.account.account;
+        if (!acc || !acc.data) return;
+
+        // Resolve pool address from pubkey bytes
+        let poolAddress: string;
+        try {
+          poolAddress = bs58.encode(Buffer.from(acc.pubkey));
+        } catch { return; }
+
+        if (!this.trackedPools.has(poolAddress)) return;
+
+        // Parse PumpSwap pool reserves: baseReserves@107, quoteReserves@115
+        const raw = Buffer.from(acc.data);
+        if (raw.length < 123) return;
+        const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+        const baseReserves = view.getBigUint64(107, true);
+        const quoteReserves = view.getBigUint64(115, true);
+        this.onPoolUpdate(poolAddress, baseReserves, quoteReserves);
         return;
       }
       if (data.transaction) {

@@ -21,6 +21,7 @@ export class ExitManager {
   private telegram?: TelegramNotifier;
   private onExitSuccess?: (pnlSol: number, tradeInfo?: TradeHistoryEntry) => void;
   private wsMonitor?: WsPoolMonitor;
+  private grpcWatcher?: { removePoolMonitor: (addr: string) => void };
 
   constructor(wallet: Keypair, telegram?: TelegramNotifier, onExitSuccess?: (pnlSol: number, tradeInfo?: TradeHistoryEntry) => void) {
     this.connection = new Connection(CONFIG.RPC_URL, 'confirmed');
@@ -35,6 +36,13 @@ export class ExitManager {
    */
   setWsMonitor(monitor: WsPoolMonitor): void {
     this.wsMonitor = monitor;
+  }
+
+  /**
+   * Attach the gRPC watcher for pool monitoring cleanup on position exit.
+   */
+  setGrpcWatcher(watcher: { removePoolMonitor: (addr: string) => void }): void {
+    this.grpcWatcher = watcher;
   }
 
   getPositions(): Position[] {
@@ -491,10 +499,12 @@ export class ExitManager {
     const interval = this.activeMonitors.get(mint);
     if (interval) clearInterval(interval);
     this.activeMonitors.delete(mint);
-    // Unsubscribe from WS pool updates
+    // Unsubscribe from WS and gRPC pool updates
     const pos = this.positions.get(mint);
-    if (pos?.poolInfo && this.wsMonitor) {
-      this.wsMonitor.unsubscribePool(pos.poolInfo.poolAddress.toBase58());
+    if (pos?.poolInfo) {
+      const poolAddr = pos.poolInfo.poolAddress.toBase58();
+      if (this.wsMonitor) this.wsMonitor.unsubscribePool(poolAddr);
+      if (this.grpcWatcher) this.grpcWatcher.removePoolMonitor(poolAddr);
     }
     this.positions.delete(mint);
     this.poolMissCount.delete(mint);

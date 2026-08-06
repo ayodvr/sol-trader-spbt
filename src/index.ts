@@ -413,6 +413,17 @@ async function main() {
     activeWatcher.start(watcherCallback);
   }
 
+  // Wire gRPC pool exit monitoring — if we have a GrpcWatcher, hook it up to route
+  // pool account change notifications directly to ExitManager (~30ms, faster than WS)
+  if (activeWatcher instanceof GrpcWatcher) {
+    activeWatcher.setPoolUpdateCallback(async (poolAddress, baseReserves, quoteReserves) => {
+      for (const em of exitManagers) {
+        await em.handleWsPoolUpdate(poolAddress, baseReserves, quoteReserves);
+      }
+    });
+    logger.info('⚡ gRPC pool exit monitoring enabled (~30ms exit latency)');
+  }
+
   process.on('SIGINT', () => { if (activeWatcher) activeWatcher.stop(); shutdown(); });
   process.on('SIGTERM', () => { if (activeWatcher) activeWatcher.stop(); shutdown(); });
 
@@ -532,6 +543,11 @@ async function main() {
         exitManagers.push(exitManager);
         // Attach WS monitor for real-time event-driven exit checks (free, no gRPC needed)
         exitManager.setWsMonitor(wsPoolMonitor);
+        // If gRPC is active, also subscribe via gRPC for faster ~30ms exit notifications
+        if (activeWatcher instanceof GrpcWatcher && poolInfo) {
+          activeWatcher.addPoolMonitor(poolInfo.poolAddress.toBase58());
+          exitManager.setGrpcWatcher(activeWatcher);
+        }
         // Fix 2: pass source='amm' + poolInfo so exit manager routes sell correctly
         exitManager.addPosition(poolInfo.baseMint.toBase58(), 0, snipeLamports, estimatedTokens, 'amm', poolInfo, rugCheck.tokenProgram);
       } else {
