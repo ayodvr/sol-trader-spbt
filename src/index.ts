@@ -527,7 +527,10 @@ async function main() {
       // not a blanket delay applied to everything.
       // ─────────────────────────────────────────────────────────────────────────
 
-      const rugCheck = await analyzer.analyze(poolInfo.baseMint, poolInfo.poolAddress, undefined, true);
+      // BUG FIX: previously passed `undefined` for creator, silently skipping the dev-history
+      // check (serial-rugger detection) for every AMM-track buy — poolInfo.creator was
+      // available the whole time, just never wired through.
+      const rugCheck = await analyzer.analyze(poolInfo.baseMint, poolInfo.poolAddress, poolInfo.creator, true);
       if (!rugCheck.safe) {
         stats.rugSkips++;
         logger.warn({ mint: poolInfo.baseMint.toBase58(), score: rugCheck.score, flags: rugCheck.flags }, '⛔ Skipped by anti-rug');
