@@ -225,9 +225,15 @@ export async function waitForBundleConfirmation(
     return 'confirmed';
   }
 
+  // A real Jito bundle ID is a UUID (contains dashes); connection.getSignatureStatus() only
+  // makes sense for an actual base58 transaction signature, which is what the direct-RPC
+  // fallback path in executeSubmitJitoBundle returns instead. Skip the doomed lookup otherwise
+  // rather than burning an RPC call every poll tick for a value that can never match.
+  const looksLikeTxSignature = !bundleId.includes('-');
+
   for (let i = 0; i < maxRetries; i++) {
     // 1. Primary check: Check Solana RPC signature status if connection is provided
-    if (connection) {
+    if (connection && looksLikeTxSignature) {
       try {
         const sigStatus = await connection.getSignatureStatus(bundleId);
         const confStatus = sigStatus.value?.confirmationStatus;

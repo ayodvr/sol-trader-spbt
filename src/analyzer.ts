@@ -1,5 +1,5 @@
 import { Connection, PublicKey } from '@solana/web3.js';
-import { getMint, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import { getMint, getAssociatedTokenAddress, getTransferFeeConfig, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 
 import { CONFIG } from '../config.js';
 import { RugCheckResult } from './types.js';
@@ -126,13 +126,50 @@ export class RugAnalyzer {
         result.score -= 15;
       }
 
+      // ─── Check 1b: Token-2022 transfer-fee tax (the only real buy/sell tax mechanism
+      // a pump.fun-style Token-2022 mint can carry) ───────────
+      // getMint() already populated mintInfo.tlvData for Token-2022 mints — no extra RPC call needed.
+      if (tokenProgram.equals(TOKEN_2022_PROGRAM_ID)) {
+        try {
+          const feeConfig = getTransferFeeConfig(mintInfo);
+          if (feeConfig) {
+            // newerTransferFee is the fee scheduled to take effect at its recorded epoch — check
+            // it too, not just the currently-active one, since devs can pre-schedule a fee hike
+            // that only becomes visible on-chain in advance via this field.
+            const feeBps = Math.max(
+              feeConfig.olderTransferFee.transferFeeBasisPoints,
+              feeConfig.newerTransferFee.transferFeeBasisPoints
+            );
+            const feePercent = feeBps / 100;
+            result.buyTax = feePercent;
+            result.sellTax = feePercent; // Token-2022 transfer fee applies uniformly to every transfer
+
+            if (feePercent > CONFIG.MAX_BUY_TAX || feePercent > CONFIG.MAX_SELL_TAX) {
+              result.flags.push(`TRANSFER_FEE_TOO_HIGH: ${feePercent}%`);
+              result.score = 0;
+              result.safe = false;
+              logger.warn({ mint: mintStr, feePercent }, '❌ Token-2022 transfer fee exceeds max — instant fail');
+              analysisCache.set(mintStr, { result, expiresAt: Date.now() + CACHE_TTL_MS });
+              return result;
+            } else if (feePercent > 0) {
+              result.flags.push(`TRANSFER_FEE: ${feePercent}%`);
+              result.score -= 10;
+            }
+          }
+        } catch (feeErr: any) {
+          logger.debug({ mint: mintStr, err: feeErr.message }, 'Transfer-fee extension read failed — treating as untaxed');
+        }
+      }
+
       // ─── Check 2: Tax estimation via bonding curve ───────────
       const curveAccount = await withRpcRetry(() => this.connection.getAccountInfo(bondingCurveOrPool));
+      let curveRealTokenReserves: bigint | null = null;
       if (curveAccount) {
         const view = new DataView(curveAccount.data.buffer);
 
         const virtualTokenReserves = view.getBigUint64(64, true);
         const realTokenReserves = view.getBigUint64(80, true);
+        curveRealTokenReserves = realTokenReserves;
 
         if (virtualTokenReserves > 0n) {
           const tokenDeviation = Number(
@@ -150,15 +187,39 @@ export class RugAnalyzer {
       }
 
       // ─── Check 3: Supply distribution ───────────
-      const topHolders = await this.getTopHolders(mint, 10);
+      // The bonding curve custodies the entire unsold supply in its own ATA until people buy —
+      // right at launch that's ~100% of supply, which would otherwise make getTokenLargestAccounts
+      // report the curve itself as the #1 "holder" and false-positive almost every fresh token as
+      // over-concentrated. Exclude it, and compare against CIRCULATING supply (total minus what's
+      // still parked in the curve) rather than raw total supply — otherwise removing the curve's
+      // balance from the numerator while leaving it in the denominator would make concentration
+      // among real buyers look artificially low instead.
+      let custodialTokenAccount: PublicKey | null = null;
+      if (!isAmm) {
+        try {
+          custodialTokenAccount = await getAssociatedTokenAddress(mint, bondingCurveOrPool, true, tokenProgram);
+        } catch { /* fall back to uncorrected calculation below */ }
+      }
+
+      const topHolders = await this.getTopHolders(mint, 11);
       const totalSupply = mintInfo.supply;
 
       if (totalSupply > 0n) {
         let top10Sum = 0n;
-        for (const [, balance] of topHolders) {
+        let top10Count = 0;
+        for (const [addr, balance] of topHolders) {
+          if (custodialTokenAccount && addr.equals(custodialTokenAccount)) continue;
+          if (top10Count >= 10) continue;
           top10Sum += balance;
+          top10Count++;
         }
-        result.top10HolderPercent = Number((top10Sum * 10000n) / totalSupply) / 100;
+
+        const circulatingSupply = curveRealTokenReserves !== null
+          ? totalSupply - curveRealTokenReserves
+          : totalSupply;
+        const denom = circulatingSupply > 0n ? circulatingSupply : totalSupply;
+
+        result.top10HolderPercent = Number((top10Sum * 10000n) / denom) / 100;
 
         if (result.top10HolderPercent > 65) {
           // Insiders/bundlers hold > 65% of supply = guaranteed fast-rug dump = INSTANT FAIL

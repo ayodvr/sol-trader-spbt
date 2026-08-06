@@ -45,6 +45,7 @@ export interface Position {
   tokenProgram?: string;           // SPL or Token-2022 program ID
   currentPrice?: number;           // Last observed price (updated each monitor tick)
   currentPriceChangePercent?: number; // Unrealised PnL % vs entry (updated each tick)
+  exitAttempts?: number;           // Failed sell attempts so far (for bounded retry-until-abandon)
 }
 
 export interface TradeHistoryEntry {

@@ -157,7 +157,7 @@ export async function ammBuy(
   tipLamports: number = CONFIG.JITO_TIP_LAMPORTS,
   score: number = 45,
   tokenProgramId: PublicKey = TOKEN_PROGRAM_ID, // Token-2022 or standard SPL
-): Promise<{ success: boolean; bundleId?: string; error?: string }> {
+): Promise<{ success: boolean; bundleId?: string; tokenBalance?: bigint; error?: string }> {
   try {
     // Use the correct token program for creating token accounts
     const userBaseTokenAccount = await getAssociatedTokenAddress(poolInfo.baseMint, wallet.publicKey, false, tokenProgramId);
@@ -218,8 +218,18 @@ export async function ammBuy(
 
     const status = await waitForBundleConfirmation(bundleId, 30, 500, connection);
     if (status === 'confirmed') {
-      logger.info({ bundleId }, '✅ AMM Buy confirmed');
-      return { success: true, bundleId };
+      // Fetch the real post-trade balance — the pre-trade estimate can be off due to
+      // price impact/slippage from competing buys, which would otherwise cause the
+      // later sell to under/over-shoot the actual on-chain balance.
+      let tokenBalance = baseAmountOut;
+      try {
+        const balance = await connection.getTokenAccountBalance(userBaseTokenAccount);
+        tokenBalance = BigInt(balance.value.amount);
+      } catch (balErr: any) {
+        logger.warn({ err: balErr.message }, '⚠️ Post-buy AMM balance fetch failed — using pre-trade estimate');
+      }
+      logger.info({ bundleId, tokenBalance: tokenBalance.toString() }, '✅ AMM Buy confirmed');
+      return { success: true, bundleId, tokenBalance };
     }
     return { success: false, error: `AMM buy status: ${status}` };
 

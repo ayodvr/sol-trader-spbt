@@ -269,10 +269,19 @@ export async function nativeSnipe(
       const status = await waitForBundleConfirmation(bundleId, 30, 500, connection);
 
       if (status === 'confirmed') {
-        const balance = await connection.getTokenAccountBalance(userTokenAccount);
+        // Buy already landed — fetch the real balance separately so an RPC hiccup here
+        // doesn't fall into the outer catch and trigger a duplicate buy submission.
+        let tokenBalance = estimatedTokens;
+        try {
+          const balance = await connection.getTokenAccountBalance(userTokenAccount);
+          tokenBalance = BigInt(balance.value.amount);
+        } catch (balErr: any) {
+          logger.warn({ mint: mint.toBase58(), err: balErr.message }, '⚠️ Post-buy balance fetch failed — using pre-trade estimate');
+        }
+
         logger.info({
           mint: mint.toBase58(),
-          balance: balance.value.uiAmount,
+          balance: tokenBalance.toString(),
           bundleId,
           builder: native ? 'Rust' : 'JS',
           buildTime: `${buildTime}ms`,
@@ -281,7 +290,7 @@ export async function nativeSnipe(
         return {
           success: true,
           txHash: bundleId,
-          tokenBalance: balance.value.amount as any,
+          tokenBalance,
         };
       }
 

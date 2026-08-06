@@ -87,6 +87,7 @@ async function main() {
     totalBondingCurveSnipes: 0,
     totalAmmSnipes: 0,
     successfulExits: 0,
+    winningExits: 0,
     rugSkips: 0,
     totalPnl: 0,
     startTime: Date.now(),
@@ -163,6 +164,8 @@ async function main() {
       if (Array.isArray(saved.history)) tradeHistory.push(...saved.history);
       if (saved.stats) {
         stats.successfulExits = saved.stats.successfulExits || 0;
+        stats.winningExits = saved.stats.winningExits || 0;
+        stats.rugSkips = saved.stats.rugSkips || 0;
         if (Array.isArray(saved.history)) {
           stats.totalPnl = saved.history.reduce((sum: number, item: any) => sum + (typeof item.pnlSol === 'number' ? item.pnlSol : (parseFloat(item.pnlSol) || 0)), 0);
         } else {
@@ -179,6 +182,8 @@ async function main() {
         history: tradeHistory,
         stats: {
           successfulExits: stats.successfulExits,
+          winningExits: stats.winningExits,
+          rugSkips: stats.rugSkips,
           totalPnl: stats.totalPnl,
         }
       }, null, 2));
@@ -357,6 +362,7 @@ async function main() {
 
         const exitManager = new ExitManager(snipeWallet, telegram, (pnlSol, tradeInfo) => {
           stats.successfulExits++;
+          if (pnlSol > 0) stats.winningExits++;
           stats.totalPnl += pnlSol;
           walletManager.releaseWallet(snipeWallet.publicKey);
           // ✅ Fix 6: Remove this manager from the array once its position closes (memory leak fix)
@@ -526,6 +532,7 @@ async function main() {
 
         const exitManager = new ExitManager(snipeWallet, telegram, (pnlSol, tradeInfo) => {
           stats.successfulExits++;
+          if (pnlSol > 0) stats.winningExits++;
           stats.totalPnl += pnlSol;
           walletManager.releaseWallet(snipeWallet.publicKey); // Fix 7: release wallet after exit
           // ✅ Fix 6: Remove this manager from the array once its position closes (memory leak fix)
@@ -549,7 +556,10 @@ async function main() {
           exitManager.setGrpcWatcher(activeWatcher);
         }
         // Fix 2: pass source='amm' + poolInfo so exit manager routes sell correctly
-        exitManager.addPosition(poolInfo.baseMint.toBase58(), 0, snipeLamports, estimatedTokens, 'amm', poolInfo, rugCheck.tokenProgram);
+        // Use the real post-trade balance when available (falls back to the pre-trade
+        // estimate only if the balance fetch itself failed) — selling against a stale
+        // pre-trade estimate can under/over-shoot the actual on-chain balance.
+        exitManager.addPosition(poolInfo.baseMint.toBase58(), 0, snipeLamports, result.tokenBalance ?? estimatedTokens, 'amm', poolInfo, rugCheck.tokenProgram);
       } else {
         walletManager.releaseWallet(snipeWallet.publicKey);
         logger.warn({ mint: poolInfo.baseMint.toBase58(), error: result.error || 'Unknown' }, '❌ AMM Snipe execution failed');
@@ -563,6 +573,7 @@ async function main() {
       await walletManager.sweepWallets(masterKeypair, 1.0, 0.3); // 🧹 Sweep profits > 1.0 SOL back to master (keep 0.3)
       await walletManager.refillWallets(masterKeypair, 0.1, 0.3); // ⛽ Refill wallets < 0.1 SOL up to 0.3
       walletManager.saveState('./wallet-state.json');
+      saveTradeHistoryDisk(); // persist rugSkips/winningExits periodically (they don't change on every trade completion)
     } catch (err: any) {
       logger.warn({ err: err.message }, '⚠️ Wallet maintenance tick failed — will retry next interval');
     }

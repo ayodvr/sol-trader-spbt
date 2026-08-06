@@ -94,6 +94,8 @@ export class ExitManager {
   private readonly POLL_INTERVAL_MS = CONFIG.DRY_RUN ? 10_000 : 2_000;
   // How many consecutive "pool not found" ticks before force-closing a stuck position
   private poolMissCount: Map<string, number> = new Map();
+  // How many failed sell retries before giving up on a position and alerting for manual action
+  private readonly MAX_EXIT_ATTEMPTS = 20;
 
   private startMonitoring(mint: string): void {
     const interval = setInterval(async () => {
@@ -439,6 +441,7 @@ export class ExitManager {
 
       // Sweep profits if balance exceeds threshold
       await this.sweepProfits();
+      this.cleanupPosition(pos.mint);
 
     } else {
       logger.error({ mint: pos.mint, reason, error: result.error }, '❌ Exit execution failed');
@@ -486,13 +489,31 @@ export class ExitManager {
             });
           }
           await this.sweepProfits();
+          this.cleanupPosition(pos.mint);
         } else {
-          logger.error({ mint: pos.mint, error: retry.error }, '❌ Exit retry also failed');
+          pos.exitAttempts = (pos.exitAttempts || 0) + 1;
+          logger.error({ mint: pos.mint, error: retry.error, attempts: pos.exitAttempts }, '❌ Exit retry also failed');
+
+          if (pos.exitAttempts >= this.MAX_EXIT_ATTEMPTS) {
+            // Genuinely stuck (e.g. account permanently invalid) — stop hammering RPC/Jito,
+            // but say so loudly instead of silently dropping the position. Tokens are still
+            // in the wallet and need a manual sell.
+            logger.error({ mint: pos.mint, attempts: pos.exitAttempts }, '🚨 Giving up on exit after max attempts — tokens still in wallet, manual sell required');
+            this.telegram?.onError({
+              context: 'Exit abandoned',
+              error: `Failed to sell after ${pos.exitAttempts} attempts — tokens are still in the wallet, manual action required`,
+              mint: pos.mint,
+            });
+            this.cleanupPosition(pos.mint);
+          } else {
+            // Re-arm: the existing poll interval (and any WS/gRPC-triggered check) will
+            // naturally retry the exit on its next tick since the underlying condition
+            // (rug/stop-loss/etc.) is still true.
+            pos.exitTriggered = false;
+          }
         }
       }, 2000);
     }
-
-    this.cleanupPosition(pos.mint);
   }
 
   private cleanupPosition(mint: string): void {
@@ -535,7 +556,8 @@ export class ExitManager {
     const pos = this.positions.get(mint);
     if (!pos) return false;
     logger.info({ mint }, '✋ Manual emergency exit requested via API');
-    this.cleanupPosition(mint);
+    // Don't cleanup (untrack) until executeExit confirms success — otherwise a failed
+    // manual exit silently drops the position while the tokens are still in the wallet.
     await this.executeExit(pos, 'manual');
     return true;
   }
