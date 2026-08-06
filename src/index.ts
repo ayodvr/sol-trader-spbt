@@ -446,54 +446,12 @@ async function main() {
         return;
       }
 
-      // ─── 30-second delayed confirmation ───────────────────────────────────────
-      // Record opening price, wait 30s, then re-check the pool is still alive
-      // and the price hasn't crashed. Filters devs who rug in the first window.
-      const CONFIRMATION_DELAY_MS = 30_000;
-      const openingPrice = poolInfo.baseReserves > 0n
-        ? Number(poolInfo.quoteReserves) / Number(poolInfo.baseReserves)
-        : 0;
-
-      logger.info({ mint: baseMintStr, openingPrice: openingPrice.toFixed(8) }, '⏳ Pool detected — waiting 30s for rug filter...');
-      await new Promise(r => setTimeout(r, CONFIRMATION_DELAY_MS));
-
-      if (!botState.isRunning) return;
-
-      // Re-fetch live pool state after the wait
-      let freshPoolInfo: AmmPoolInfo | null = null;
-      try {
-        const poolAcc = await connection.getAccountInfo(poolInfo.poolAddress);
-        if (poolAcc && poolAcc.data.length >= 123) {
-          const view = new DataView(poolAcc.data.buffer);
-          const baseReserves = view.getBigUint64(107, true);
-          const quoteReserves = view.getBigUint64(115, true);
-          freshPoolInfo = { ...poolInfo, baseReserves, quoteReserves };
-        }
-      } catch { /* ignore */ }
-
-      if (!freshPoolInfo) {
-        stats.rugSkips++;
-        logger.warn({ mint: baseMintStr }, '⛔ Pool gone after 30s — rug confirmed, skipping');
-        return;
-      }
-
-      // Price crashed >30% since open = dev dumped or fast rug
-      const confirmedPrice = freshPoolInfo.baseReserves > 0n
-        ? Number(freshPoolInfo.quoteReserves) / Number(freshPoolInfo.baseReserves)
-        : 0;
-      const priceChangePct = openingPrice > 0
-        ? ((confirmedPrice - openingPrice) / openingPrice) * 100
-        : 0;
-
-      if (priceChangePct < -30) {
-        stats.rugSkips++;
-        logger.warn({ mint: baseMintStr, priceChangePct: `${priceChangePct.toFixed(1)}%` }, '⛔ Price crashed >30% in first 30s — skipping');
-        return;
-      }
-
-      logger.info({ mint: baseMintStr, priceChangePct: `${priceChangePct.toFixed(1)}%` }, '✅ 30s rug filter passed — proceeding to analysis');
-      poolInfo = freshPoolInfo;
+      // ─── Proceed immediately to analysis ──────────────────────────────────────
+      // gRPC gives ~30ms entry detection. WS exit monitoring catches rugs in
+      // ~100-400ms. At 0.01 SOL position size, an instant rug costs -0.009 SOL.
+      // The 30s delay was costing us all the fast pumps — removed.
       // ─────────────────────────────────────────────────────────────────────────
+
 
       const rugCheck = await analyzer.analyze(poolInfo.baseMint, poolInfo.poolAddress, undefined, true);
       if (!rugCheck.safe) {
