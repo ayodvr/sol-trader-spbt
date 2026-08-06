@@ -55,6 +55,18 @@ const MASTER_WALLET_PATH = './wallets.json';
 const USE_GRPC = !!(process.env.GRPC_ENDPOINT && process.env.GRPC_TOKEN);
 const USE_TRITON_V5 = process.env.GRPC_USE_TRITON_V5 === 'true'; // Opt-in for Triton v5 NaaE; Alchemy uses standard GrpcWatcher
 
+/**
+ * Whether an exit counts as strong enough evidence to add a strike to a creator's rug record.
+ * rug_detected (price hit literal zero) always counts; otherwise only a severely-realized loss
+ * (worse than -60%) does — ordinary stop-losses/trailing-stops happen on most trades in this
+ * environment and aren't reliable evidence the creator specifically did anything wrong.
+ */
+function isConfirmedRugExit(reason: string, pnlPercentStr: string): boolean {
+  if (reason === 'rug_detected') return true;
+  const pct = parseFloat(pnlPercentStr);
+  return !isNaN(pct) && pct <= -60;
+}
+
 async function main() {
   console.log(`
 ╔══════════════════════════════════════════════════════╗
@@ -432,10 +444,13 @@ async function main() {
             tradeHistory.unshift(tradeInfo);
             if (tradeHistory.length > 50) tradeHistory.pop();
             saveTradeHistoryDisk();
+            if (tradeInfo.creator && isConfirmedRugExit(tradeInfo.reason, tradeInfo.pnlPercent)) {
+              analyzer.recordRug(tradeInfo.creator);
+            }
           }
         });
         exitManagers.push(exitManager);
-        exitManager.addPosition(event.mint.toBase58(), event.slot, CONFIG.SNIPE_AMOUNT_LAMPORTS, result.tokenBalance || 0n, 'bonding_curve', undefined, rugCheck.tokenProgram);
+        exitManager.addPosition(event.mint.toBase58(), event.slot, CONFIG.SNIPE_AMOUNT_LAMPORTS, result.tokenBalance || 0n, 'bonding_curve', undefined, rugCheck.tokenProgram, event.creator.toBase58());
 
         telegram.onSnipe({
           mint: event.mint.toBase58(),
@@ -617,6 +632,9 @@ async function main() {
             tradeHistory.unshift(tradeInfo);
             if (tradeHistory.length > 50) tradeHistory.pop();
             saveTradeHistoryDisk();
+            if (tradeInfo.creator && isConfirmedRugExit(tradeInfo.reason, tradeInfo.pnlPercent)) {
+              analyzer.recordRug(tradeInfo.creator);
+            }
           }
         });
         exitManagers.push(exitManager);
@@ -631,7 +649,7 @@ async function main() {
         // Use the real post-trade balance when available (falls back to the pre-trade
         // estimate only if the balance fetch itself failed) — selling against a stale
         // pre-trade estimate can under/over-shoot the actual on-chain balance.
-        exitManager.addPosition(poolInfo.baseMint.toBase58(), 0, snipeLamports, result.tokenBalance ?? estimatedTokens, 'amm', poolInfo, rugCheck.tokenProgram);
+        exitManager.addPosition(poolInfo.baseMint.toBase58(), 0, snipeLamports, result.tokenBalance ?? estimatedTokens, 'amm', poolInfo, rugCheck.tokenProgram, poolInfo.creator.toBase58());
       } else {
         walletManager.releaseWallet(snipeWallet.publicKey);
         logger.warn({ mint: poolInfo.baseMint.toBase58(), error: result.error || 'Unknown' }, '❌ AMM Snipe execution failed');

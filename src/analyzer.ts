@@ -1,5 +1,6 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { getMint, getAssociatedTokenAddress, getTransferFeeConfig, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import fs from 'fs';
 
 import { CONFIG } from '../config.js';
 import { RugCheckResult } from './types.js';
@@ -15,6 +16,15 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 // Cache developer history results for 1 hour to prevent redundant Helius API calls (saves massive RPC credits)
 const devHistoryCache = new Map<string, { devScore: number; expiresAt: number }>();
 const DEV_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+// ─── Cross-run creator blacklist ───────────────────────────────────────────
+// Persists to disk so a wallet that rugged you once stays blocked across restarts, not just
+// within the current process's memory. Only "confirmed bad" outcomes add a strike — rug_detected
+// (price literally hit zero) or a severely-realized loss (worse than -60%) — not ordinary
+// stop-losses/trailing-stops, which happen on the majority of trades in this environment and
+// would otherwise blacklist most creators regardless of whether they actually did anything wrong.
+const RUG_DB_FILE = './rug-db.json';
+const RUG_BLACKLIST_STRIKES = 1; // one confirmed rug = permanently blocked
 
 /**
  * Helper to wrap RPC calls with automatic exponential backoff for Helius free tier (10 RPS limit).
@@ -41,20 +51,40 @@ async function withRpcRetry<T>(fn: () => Promise<T>, maxRetries: number = 3, ini
 
 export class RugAnalyzer {
   private connection: Connection;
+  private rugDb: Map<string, number> = new Map(); // creator base58 → confirmed-rug strike count
 
   constructor() {
     this.connection = new Connection(CONFIG.RPC_URL, 'confirmed');
+    try {
+      const data = JSON.parse(fs.readFileSync(RUG_DB_FILE, 'utf-8'));
+      this.rugDb = new Map(Object.entries(data));
+      logger.info({ count: this.rugDb.size }, '🗄️ Loaded creator rug blacklist from disk');
+    } catch { /* fresh start — no rug-db.json yet */ }
+  }
+
+  private saveRugDb(): void {
+    try {
+      fs.writeFileSync(RUG_DB_FILE, JSON.stringify(Object.fromEntries(this.rugDb), null, 2));
+    } catch (err: any) {
+      logger.error({ err: err.message }, 'Failed to persist rug blacklist');
+    }
+  }
+
+  /**
+   * Record a confirmed-bad outcome against a creator wallet. Persists immediately so the
+   * blacklist survives a restart. Call this from the exit-success path — see analyze()'s
+   * hard-block check below for where this gets enforced on future candidates.
+   */
+  recordRug(creatorStr: string): void {
+    const count = (this.rugDb.get(creatorStr) || 0) + 1;
+    this.rugDb.set(creatorStr, count);
+    this.saveRugDb();
+    logger.warn({ creator: creatorStr.slice(0, 8) + '...', strikes: count }, '🚫 Creator recorded on rug blacklist');
   }
 
   async analyze(mint: PublicKey, bondingCurveOrPool: PublicKey, creator?: PublicKey, isAmm: boolean = false): Promise<RugCheckResult> {
     const mintStr = mint.toBase58();
 
-    // Return cached result if still valid
-    const cached = analysisCache.get(mintStr);
-    if (cached && Date.now() < cached.expiresAt) {
-      logger.debug({ mint: mintStr }, 'Using cached rug check result');
-      return cached.result;
-    }
     const result: RugCheckResult = {
       safe: false,
       score: 100,
@@ -69,6 +99,26 @@ export class RugAnalyzer {
       devScore: 100,
       socialScore: 0,
     };
+
+    // ─── Hard block: creator previously confirmed to have rugged us ───────────
+    // Checked before anything else — no point spending RPC/Helius calls analyzing a token from
+    // a wallet we already have first-hand evidence on. No cache TTL on this one; it's permanent
+    // until manually cleared (delete the entry from rug-db.json).
+    const creatorStr = creator?.toBase58();
+    if (creatorStr && (this.rugDb.get(creatorStr) || 0) >= RUG_BLACKLIST_STRIKES) {
+      result.safe = false;
+      result.score = 0;
+      result.flags.push('SERIAL_RUGGER');
+      logger.warn({ creator: creatorStr.slice(0, 8) + '...' }, '⛔ Creator previously rugged us — hard skip');
+      return result;
+    }
+
+    // Return cached result if still valid
+    const cached = analysisCache.get(mintStr);
+    if (cached && Date.now() < cached.expiresAt) {
+      logger.debug({ mint: mintStr }, 'Using cached rug check result');
+      return cached.result;
+    }
 
     try {
       // ─── Check 1: Mint & Freeze Authority ───────────
@@ -246,9 +296,12 @@ export class RugAnalyzer {
       }
 
       // ─── Check 4: Volume Spike / Coordinated Pump Detection ───────────
-      // NOTE: Skipped for AMM pools — at graduation, ALL early txs are naturally buys
-      // (people rushing in), so the check always fires as a false positive there.
-      if (!isAmm) {
+      // Runs on both tracks now. checkVolumeSpike requires real sell pressure to exist before
+      // it fires (see sellCount gate there), which handles the false-positive risk on BOTH
+      // sides: a brand-new bonding-curve token has no sellers yet by construction, and a
+      // freshly-graduated AMM pool sees a real simultaneous buy rush — neither should trip
+      // "coordinated pump" just for being all-buys with nothing to compare against yet.
+      {
         const volumeCheck = await this.checkVolumeSpike(mintStr);
         if (volumeCheck.isCoordinated) {
           // Coordinated pump = wash trading by dev and insiders = INSTANT FAIL
@@ -265,8 +318,8 @@ export class RugAnalyzer {
       if (creator) {
         const devScore = await this.checkDevHistory(creator.toBase58());
         result.devScore = devScore;
-        if (devScore < 50) {
-          const penalty = Math.floor((50 - devScore) / 5) * 10; // Up to -100 points for serial ruggers
+        if (devScore < CONFIG.MIN_DEV_HISTORY_SCORE) {
+          const penalty = Math.floor((CONFIG.MIN_DEV_HISTORY_SCORE - devScore) / 5) * 10; // Up to -100 points for serial ruggers
           result.score -= penalty;
           result.flags.push(`BAD_DEV_HISTORY: ${devScore}`);
           logger.warn({ creator: creator.toBase58().slice(0, 8), devScore, penalty }, '⚠️ Suspicious dev history');
@@ -450,18 +503,25 @@ export class RugAnalyzer {
         for (const transfer of tokenTransfers) {
           if (transfer.fromUserAccount === creatorStr && transfer.mint) {
             checkedMints++;
-            // Check if this token is still alive via token supply
+            // BUG FIX: the old check required mintInfo.supply === 0n — the entire token supply
+            // burned — to count as a rug. That essentially never happens in a real pump.fun
+            // dump: the mint and its full supply stay intact forever; what actually changes is
+            // the creator's OWN balance (they sell out) and the pool's liquidity (drained). A
+            // serial rugger who dumped every prior token and walked away would show supply
+            // untouched every time, scoring as perfectly clean. Check what actually happens
+            // instead: does the creator currently hold zero of a token we know they sold from?
             try {
               const mintPubkey = new PublicKey(transfer.mint);
-              const mintInfo = await getMint(this.connection, mintPubkey);
               const ageHours = (now - (tx.timestamp * 1000)) / (1000 * 60 * 60);
-              
-              // If token is < 24h old and supply is 0, it rugged fast
-              if (ageHours < 24 && mintInfo.supply === 0n) {
-                rugCount++;
+
+              if (ageHours < 24) {
+                const creatorBalance = await this.getOwnerTokenBalance(mintPubkey, new PublicKey(creatorStr));
+                if (creatorBalance === 0n) {
+                  rugCount++;
+                }
               }
             } catch {
-              // Token account not found = likely rugged/abandoned
+              // Mint/account not found — likely rugged/abandoned
               rugCount++;
             }
           }
@@ -485,6 +545,22 @@ export class RugAnalyzer {
       logger.debug({ creator: creatorStr.slice(0, 8), err: err.message }, 'Helius dev history check failed');
       return 100; // Fail open — don't block if Helius is down
     }
+  }
+
+  /**
+   * Get an owner's current balance of a mint, trying standard SPL Token first then Token-2022
+   * (historic mints from a creator's past launches could be either). Returns 0n if neither ATA
+   * exists or has a balance — i.e. the owner currently holds none of it.
+   */
+  private async getOwnerTokenBalance(mint: PublicKey, owner: PublicKey): Promise<bigint> {
+    for (const programId of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+      try {
+        const ata = await getAssociatedTokenAddress(mint, owner, false, programId);
+        const bal = await this.connection.getTokenAccountBalance(ata);
+        return BigInt(bal.value.amount);
+      } catch { /* ATA doesn't exist under this program — try the other, or fall through to 0 */ }
+    }
+    return 0n;
   }
 
   /**
@@ -537,9 +613,14 @@ export class RugAnalyzer {
       if (totalSided === 0) return { isCoordinated: false, buyPct: 0, txCount: transactions.length };
 
       const buyPct = Math.round((buyCount / totalSided) * 100);
-      // >92% buys in first 20 transactions = suspicious coordinated launch
+      // >92% buys in first 20 transactions = suspicious coordinated launch — but only once
+      // there's actually been real selling to compare against (sellCount >= 3). A brand-new
+      // bonding-curve token or a just-graduated AMM pool can legitimately show ~100% buys for
+      // a while simply because nobody who just bought seconds ago is selling yet — that's not
+      // coordination, it's just early. Wash-trading/coordinated-pump patterns show up as
+      // buy-skewed ratios despite genuine two-sided flow already existing, not as "no sells yet".
       const COORDINATED_THRESHOLD = parseInt(process.env.COORDINATED_BUY_THRESHOLD || '92');
-      const isCoordinated = buyPct >= COORDINATED_THRESHOLD && totalSided >= 10;
+      const isCoordinated = sellCount >= 3 && buyPct >= COORDINATED_THRESHOLD && totalSided >= 10;
 
       logger.debug({
         mint: mintStr,

@@ -46,6 +46,7 @@ export interface Position {
   currentPrice?: number;           // Last observed price (updated each monitor tick)
   currentPriceChangePercent?: number; // Unrealised PnL % vs entry (updated each tick)
   exitAttempts?: number;           // Failed sell attempts so far (for bounded retry-until-abandon)
+  creator?: string;                 // Token/pool creator wallet — for cross-run rug blacklist
 }
 
 export interface TradeHistoryEntry {
@@ -56,4 +57,5 @@ export interface TradeHistoryEntry {
   pnlPercent: string;
   reason: 'take_profit' | 'stop_loss' | 'trailing_stop' | 'rug_detected' | 'manual';
   timestamp: number;
+  creator?: string;
 }

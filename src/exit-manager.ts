@@ -56,7 +56,8 @@ export class ExitManager {
     tokenBalance: bigint,
     source: 'bonding_curve' | 'amm' = 'bonding_curve',
     poolInfo?: import('./pumpswap.js').AmmPoolInfo,
-    tokenProgram?: string
+    tokenProgram?: string,
+    creator?: string
   ): void {
     const entryPrice = tokenBalance > 0n
       ? Math.max(0.000001, (amountInLamports * 1_000_000_000) / Number(tokenBalance))
@@ -74,6 +75,7 @@ export class ExitManager {
       poolInfo,
       highWaterMark: entryPrice,
       tokenProgram,
+      creator,
     };
     this.positions.set(mint, position);
     this.startMonitoring(mint);
@@ -450,7 +452,8 @@ export class ExitManager {
           pnlSol,
           pnlPercent: profitStr,
           reason: actualReason,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          creator: pos.creator,
         });
       }
 
@@ -500,7 +503,8 @@ export class ExitManager {
               pnlSol,
               pnlPercent: `${pnlSol >= 0 ? '+' : ''}${pnlPct}%`,
               reason,
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              creator: pos.creator,
             });
           }
           await this.sweepProfits();
