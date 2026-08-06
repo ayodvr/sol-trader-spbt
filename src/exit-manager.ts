@@ -335,7 +335,11 @@ export class ExitManager {
     logger.info({ mint: pos.mint, reason, source: pos.source, balance: pos.tokenBalance.toString() }, '🔄 Executing exit...');
 
     const mintPubkey = new PublicKey(pos.mint);
-    const isEmergency = reason === 'rug_detected';
+    // stop_loss/trailing_stop get the same max-slippage, max-tip emergency treatment as
+    // rug_detected: these AMM pools can crash fast enough that the 10%-slippage first attempt
+    // fails outright, pushing the sell to the 2s-later retry while price keeps falling — landing
+    // fast beats getting a good price once a loss is already being cut.
+    const isEmergency = reason === 'rug_detected' || reason === 'stop_loss' || reason === 'trailing_stop';
     const tokenProgramId = pos.tokenProgram ? new PublicKey(pos.tokenProgram) : TOKEN_PROGRAM_ID;
 
     // Refetch live on-chain token balance if stored balance is 0

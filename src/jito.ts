@@ -55,6 +55,21 @@ function getJitoEndpoint(): string {
 let jitoQueueChain: Promise<any> = Promise.resolve();
 let jitoSellQueueChain: Promise<any> = Promise.resolve(); // ✅ Fix 4: Separate queue so sell exits never block behind buy cooldowns
 
+/**
+ * Atomically reserve the next allowed Jito submission slot and return how many ms to wait
+ * before using it (0 if no wait needed). This function contains no `await`, so it runs to
+ * completion without yielding — two concurrent callers (the independent buy and sell queue
+ * chains both read/write the same lastJitoSubmitTime) can no longer both read a stale value
+ * and fire within milliseconds of each other, which was defeating the 1.2s spacing and was
+ * a likely contributor to the repeated 429 rate-limit cooldowns.
+ */
+function reserveJitoSlot(): number {
+  const now = Date.now();
+  const slot = Math.max(now, lastJitoSubmitTime + 1200);
+  lastJitoSubmitTime = slot;
+  return slot - now;
+}
+
 async function executeSubmitJitoBundle(
   transactions: Transaction[],
   signers: Keypair[],
@@ -62,54 +77,56 @@ async function executeSubmitJitoBundle(
   connection?: any
 ): Promise<string | null> {
   try {
-    // Add tip instruction to the last transaction
-    const safeTipLamports = Math.max(100_000, Math.floor(tipLamports || 100_000));
-    const tipAccount = getRandomTipAccount();
-    const tipIx = SystemProgram.transfer({
-      fromPubkey: signers[0].publicKey,
-      toPubkey: tipAccount,
-      lamports: safeTipLamports,
-    });
-    // Explicitly guarantee write-lock flag for Jito auction engine
-    tipIx.keys.forEach(k => {
-      if (k.pubkey.equals(tipAccount)) {
-        k.isWritable = true;
-      }
-    });
-
-    const targetTx = transactions[transactions.length - 1];
-    targetTx.add(tipIx);
-
-    // Serialize all transactions to base58 (required by Jito JSON-RPC API)
-    const serializedTxs = transactions.map((tx) => {
-      tx.sign(...signers);
-      return bs58.encode(tx.serialize());
-    });
-
     if (CONFIG.DRY_RUN) {
       logger.info({
-        bundleSize: serializedTxs.length,
+        bundleSize: transactions.length,
         tip: `${(tipLamports / 1_000_000_000).toFixed(4)} SOL`,
       }, 'DRY_RUN: Simulating Jito bundle submission');
       return `dry_run_bundle_${Date.now()}`;
     }
 
     // ─── Rate Limit Circuit Breaker Check ───
+    // Only attach the Jito tip when we're actually about to try Jito. A tip transfer sent via
+    // plain RPC broadcast buys zero priority there — attaching it unconditionally before this
+    // check meant every trade that fell back to direct RPC during a cooldown window was
+    // silently burning its tip lamports (0.001-0.003 SOL) for nothing.
     const now = Date.now();
-    if (now < jitoThrottledUntil) {
-      const remainingSec = Math.ceil((jitoThrottledUntil - now) / 1000);
-      logger.warn({ remainingSec }, '⚡ Jito in rate-limit cooldown — skipping bundle, routing directly to RPC broadcast');
+    const attemptJito = now >= jitoThrottledUntil;
+
+    if (attemptJito) {
+      const safeTipLamports = Math.max(100_000, Math.floor(tipLamports || 100_000));
+      const tipAccount = getRandomTipAccount();
+      const tipIx = SystemProgram.transfer({
+        fromPubkey: signers[0].publicKey,
+        toPubkey: tipAccount,
+        lamports: safeTipLamports,
+      });
+      // Explicitly guarantee write-lock flag for Jito auction engine
+      tipIx.keys.forEach(k => {
+        if (k.pubkey.equals(tipAccount)) {
+          k.isWritable = true;
+        }
+      });
+      transactions[transactions.length - 1].add(tipIx);
     } else {
-      // Try regional endpoints if not throttled
+      const remainingSec = Math.ceil((jitoThrottledUntil - now) / 1000);
+      logger.warn({ remainingSec }, '⚡ Jito in rate-limit cooldown — skipping bundle (no tip attached), routing directly to RPC broadcast');
+    }
+
+    // Sign now that the final instruction set (with or without the tip) is settled
+    for (const tx of transactions) tx.sign(...signers);
+
+    if (attemptJito) {
+      const serializedTxs = transactions.map((tx) => bs58.encode(tx.serialize()));
+
+      // Try regional endpoints
       for (let attempt = 0; attempt < 3; attempt++) {
-        // Enforce min 1.2s spacing between Jito API calls from this client
-        const currentNow = Date.now();
-        const timeSinceLast = currentNow - lastJitoSubmitTime;
-        if (timeSinceLast < 1200) {
-          const waitMs = 1200 - timeSinceLast;
+        // Enforce min 1.2s spacing between Jito API calls from this client (atomic reservation
+        // — see reserveJitoSlot — so this holds even across the separate buy/sell queues)
+        const waitMs = reserveJitoSlot();
+        if (waitMs > 0) {
           await new Promise(r => setTimeout(r, waitMs));
         }
-        lastJitoSubmitTime = Date.now();
 
         const targetEndpoint = getJitoEndpoint();
 
