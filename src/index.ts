@@ -454,12 +454,11 @@ async function main() {
     // Rate-limit: queue analysis to max 3 concurrent RPC operations
     runAnalysis(async () => {
 
-      // Guard: Check minimum pool quote liquidity (must have at least 15 SOL in pool)
-      const MIN_POOL_LIQUIDITY_SOL = 15.0;
+      // Guard: Check minimum pool quote liquidity — deeper pools take less price impact per dump
       const quoteSol = Number(poolInfo.quoteReserves) / 1_000_000_000;
-      if (quoteSol < MIN_POOL_LIQUIDITY_SOL) {
+      if (quoteSol < CONFIG.MIN_POOL_LIQUIDITY_SOL) {
         stats.rugSkips++;
-        logger.warn({ mint: poolInfo.baseMint.toBase58(), quoteSol, minRequired: MIN_POOL_LIQUIDITY_SOL }, '⛔ Skipped by anti-rug: Pool liquidity too low (< 15 SOL)');
+        logger.warn({ mint: poolInfo.baseMint.toBase58(), quoteSol, minRequired: CONFIG.MIN_POOL_LIQUIDITY_SOL }, `⛔ Skipped by anti-rug: Pool liquidity too low (< ${CONFIG.MIN_POOL_LIQUIDITY_SOL} SOL)`);
         return;
       }
 

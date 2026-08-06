@@ -30,6 +30,10 @@ export const CONFIG = {
   // Rug thresholds
   MAX_BUY_TAX: parseInt(process.env.MAX_BUY_TAX || '15'),
   MAX_SELL_TAX: parseInt(process.env.MAX_SELL_TAX || '15'),
+  // Minimum SOL liquidity an AMM pool must already hold (from the creator/other buyers) before
+  // sniping it. Deeper pools take less price impact from a given dump — this doesn't affect
+  // your own SNIPE_AMOUNT_SOL, it's a filter on the target pool's existing depth.
+  MIN_POOL_LIQUIDITY_SOL: parseFloat(process.env.MIN_POOL_LIQUIDITY_SOL || '40'),
 
   // Social & Developer Filtering
   REQUIRE_SOCIALS: process.env.REQUIRE_SOCIALS !== 'false', // Default to true for high quality

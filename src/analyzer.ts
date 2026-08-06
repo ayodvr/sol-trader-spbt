@@ -162,26 +162,35 @@ export class RugAnalyzer {
       }
 
       // ─── Check 2: Tax estimation via bonding curve ───────────
-      const curveAccount = await withRpcRetry(() => this.connection.getAccountInfo(bondingCurveOrPool));
+      // BUG FIX: this check only makes sense for the bonding-curve account layout
+      // (virtualTokenReserves@64, realTokenReserves@80). For the AMM path, `bondingCurveOrPool`
+      // is a PumpSwap POOL account instead, whose layout is completely different (creator@11,
+      // baseMint@43, quoteMint@75, baseReserves@107, quoteReserves@115 — see pumpswap.ts). Bytes
+      // 64-72/80-88 of a pool account fall inside the creator/baseMint public keys, so this was
+      // reinterpreting arbitrary pubkey bytes as a "reserve deviation" and handing out essentially
+      // random -25/-45 score penalties to AMM tokens with zero relationship to real risk.
       let curveRealTokenReserves: bigint | null = null;
-      if (curveAccount) {
-        const view = new DataView(curveAccount.data.buffer);
+      if (!isAmm) {
+        const curveAccount = await withRpcRetry(() => this.connection.getAccountInfo(bondingCurveOrPool));
+        if (curveAccount) {
+          const view = new DataView(curveAccount.data.buffer);
 
-        const virtualTokenReserves = view.getBigUint64(64, true);
-        const realTokenReserves = view.getBigUint64(80, true);
-        curveRealTokenReserves = realTokenReserves;
+          const virtualTokenReserves = view.getBigUint64(64, true);
+          const realTokenReserves = view.getBigUint64(80, true);
+          curveRealTokenReserves = realTokenReserves;
 
-        if (virtualTokenReserves > 0n) {
-          const tokenDeviation = Number(
-            (virtualTokenReserves - realTokenReserves) * 10000n / virtualTokenReserves
-          ) / 100;
+          if (virtualTokenReserves > 0n) {
+            const tokenDeviation = Number(
+              (virtualTokenReserves - realTokenReserves) * 10000n / virtualTokenReserves
+            ) / 100;
 
-          if (tokenDeviation > 30) {
-            result.flags.push(`HIGH_TOKEN_DEVIATION: ${tokenDeviation}%`);
-            result.score -= 45;
-          } else if (tokenDeviation > 5) {
-            result.flags.push(`HIGH_TOKEN_DEVIATION: ${tokenDeviation}%`);
-            result.score -= 25;
+            if (tokenDeviation > 30) {
+              result.flags.push(`HIGH_TOKEN_DEVIATION: ${tokenDeviation}%`);
+              result.score -= 45;
+            } else if (tokenDeviation > 5) {
+              result.flags.push(`HIGH_TOKEN_DEVIATION: ${tokenDeviation}%`);
+              result.score -= 25;
+            }
           }
         }
       }
@@ -229,7 +238,7 @@ export class RugAnalyzer {
           logger.warn({ mint: mintStr, pct: result.top10HolderPercent }, '⛔ Excessive top 10 holder concentration (>65%) — instant fail');
           analysisCache.set(mintStr, { result, expiresAt: Date.now() + CACHE_TTL_MS });
           return result;
-        } else if (result.top10HolderPercent > 50) {
+        } else if (result.top10HolderPercent > 35) {
           result.flags.push(`TOP_10_HOLDERS: ${result.top10HolderPercent}%`);
           result.score -= 30;
           logger.warn({ pct: result.top10HolderPercent }, '⚠️ High holder concentration');
