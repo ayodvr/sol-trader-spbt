@@ -145,16 +145,73 @@ async function main() {
   // ─── API Integration & Trade History Persistence ───
   const exitManagers: ExitManager[] = [];
 
+  // Pre-buy pool watchers: poolAddress → callback invoked on every WS reserve update while a
+  // candidate is in its pre-buy observation window (see watchBeforeBuy below).
+  const preBuyWatchers = new Map<string, (base: bigint, quote: bigint) => void>();
+
   // Shared WebSocket pool monitor — real-time exit checks on every pool trade (free, uses existing WS_URL)
   const wsPoolMonitor = new WsPoolMonitor(
     CONFIG.WS_URL,
     async (poolAddress, baseReserves, quoteReserves) => {
+      const watcher = preBuyWatchers.get(poolAddress);
+      if (watcher) watcher(baseReserves, quoteReserves);
       for (const em of exitManagers) {
         await em.handleWsPoolUpdate(poolAddress, baseReserves, quoteReserves);
       }
     }
   );
   logger.info({ wsUrl: CONFIG.WS_URL.slice(0, 40) + '...' }, '📡 WS pool monitor starting — event-driven exits active');
+
+  /**
+   * Watch an AMM pool's price for `windowMs` before committing to a buy. Returns false (abort)
+   * if price drops more than `maxDropPercent` from its pre-window reading at any point during
+   * the window, true otherwise. Catches pools dumped within the first couple seconds — a
+   * failure mode no static pre-trade snapshot check can see coming, since it's evaluating what
+   * the token looks like now, not what a large holder is about to do next.
+   */
+  async function watchBeforeBuy(
+    poolAddress: PublicKey,
+    windowMs: number,
+    maxDropPercent: number,
+  ): Promise<boolean> {
+    let baseReserves: bigint, quoteReserves: bigint;
+    try {
+      const acc = await connection.getAccountInfo(poolAddress);
+      if (!acc || acc.data.length < 123) return false; // can't read pool state — be conservative
+      const view = new DataView(acc.data.buffer, acc.data.byteOffset, acc.data.byteLength);
+      baseReserves = view.getBigUint64(107, true);
+      quoteReserves = view.getBigUint64(115, true);
+    } catch {
+      return false;
+    }
+    if (baseReserves <= 0n) return false;
+    const baselinePrice = Number(quoteReserves * 1_000_000_000n / baseReserves);
+    if (baselinePrice <= 0) return false;
+
+    const poolAddr = poolAddress.toBase58();
+    wsPoolMonitor.subscribeToPool(poolAddr);
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (result: boolean) => {
+        if (settled) return;
+        settled = true;
+        preBuyWatchers.delete(poolAddr);
+        clearTimeout(timer);
+        wsPoolMonitor.unsubscribePool(poolAddr);
+        resolve(result);
+      };
+
+      preBuyWatchers.set(poolAddr, (base, quote) => {
+        if (base <= 0n) { finish(false); return; } // reserves emptied — unambiguous abort signal
+        const price = Number(quote * 1_000_000_000n / base);
+        const dropPercent = ((baselinePrice - price) / baselinePrice) * 100;
+        if (dropPercent >= maxDropPercent) finish(false);
+      });
+
+      const timer = setTimeout(() => finish(true), windowMs);
+    });
+  }
   const TRADE_HISTORY_FILE = './trade-history.json';
   const tradeHistory: any[] = [];
 
@@ -463,16 +520,29 @@ async function main() {
       }
 
       // ─── Proceed immediately to analysis ──────────────────────────────────────
-      // gRPC gives ~30ms entry detection. WS exit monitoring catches rugs in
-      // ~100-400ms. At 0.01 SOL position size, an instant rug costs -0.009 SOL.
-      // The 30s delay was costing us all the fast pumps — removed.
+      // gRPC gives ~30ms entry detection. A blanket 30s pre-analysis delay was tried before and
+      // cost every fast pump, so it was removed — analysis itself still runs the instant a pool
+      // is seen. The short, targeted pre-buy watch below (after the rug check passes) is a
+      // different thing: a few seconds spent specifically watching THIS candidate for a dump,
+      // not a blanket delay applied to everything.
       // ─────────────────────────────────────────────────────────────────────────
-
 
       const rugCheck = await analyzer.analyze(poolInfo.baseMint, poolInfo.poolAddress, undefined, true);
       if (!rugCheck.safe) {
         stats.rugSkips++;
         logger.warn({ mint: poolInfo.baseMint.toBase58(), score: rugCheck.score, flags: rugCheck.flags }, '⛔ Skipped by anti-rug');
+        return;
+      }
+
+      // ─── Pre-buy observation window ───
+      // Catches the pattern seen repeatedly in production: a token passes every static check
+      // (liquidity, holder concentration, tax) and still gets dumped 90%+ within a couple
+      // seconds of the pool going live. Those checks are a snapshot of the past; this watches
+      // what actually happens next, for a short window, before committing capital.
+      const survivedWatch = await watchBeforeBuy(poolInfo.poolAddress, CONFIG.PRE_BUY_WATCH_MS, CONFIG.PRE_BUY_MAX_DROP_PERCENT);
+      if (!survivedWatch) {
+        stats.rugSkips++;
+        logger.warn({ mint: poolInfo.baseMint.toBase58() }, `⛔ Skipped: price dropped >${CONFIG.PRE_BUY_MAX_DROP_PERCENT}% during ${CONFIG.PRE_BUY_WATCH_MS}ms pre-buy observation window`);
         return;
       }
 

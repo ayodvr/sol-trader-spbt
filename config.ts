@@ -35,6 +35,13 @@ export const CONFIG = {
   // your own SNIPE_AMOUNT_SOL, it's a filter on the target pool's existing depth.
   MIN_POOL_LIQUIDITY_SOL: parseFloat(process.env.MIN_POOL_LIQUIDITY_SOL || '40'),
 
+  // Pre-buy observation window (AMM track): after a pool passes the anti-rug checks, watch its
+  // price for this long before actually buying — abort if it drops more than the threshold
+  // during the window. Catches pools that get dumped within the first couple seconds, which a
+  // static pre-trade snapshot check can never see coming.
+  PRE_BUY_WATCH_MS: parseInt(process.env.PRE_BUY_WATCH_MS || '2000'),
+  PRE_BUY_MAX_DROP_PERCENT: parseFloat(process.env.PRE_BUY_MAX_DROP_PERCENT || '15'),
+
   // Social & Developer Filtering
   REQUIRE_SOCIALS: process.env.REQUIRE_SOCIALS !== 'false', // Default to true for high quality
   MIN_RUG_SCORE: parseInt(process.env.MIN_RUG_SCORE || '75'),
