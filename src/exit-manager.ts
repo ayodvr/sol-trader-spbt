@@ -235,6 +235,17 @@ export class ExitManager {
 
     const priceChangePercent = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
 
+    // Sanity guard: a legitimate pump.fun/PumpSwap pool cannot move 20x+ in a single poll tick.
+    // An instantaneous jump that large is a stale/corrupted reserve read (e.g. a WS/gRPC push
+    // racing a freshly-created pool whose reserves are still settling), not a real price move.
+    // Firing take-profit off it would also price the sell's slippage floor off the same garbage
+    // reserves. Skip this tick rather than act on it — the next tick re-reads fresh data.
+    const IMPLAUSIBLE_GAIN_PERCENT = 2000; // 20x
+    if (priceChangePercent > IMPLAUSIBLE_GAIN_PERCENT) {
+      logger.warn({ mint: pos.mint, impliedGain: `${priceChangePercent.toFixed(0)}%` }, '⚠️ Implausible price spike — likely a bad reserve read, skipping this tick rather than firing take-profit');
+      return;
+    }
+
     // Exit Signal 1: Take Profit
     // ✅ Guard: verify real AMM output is profitable BEFORE firing TP.
     // Spot price can show +35% but selling a large position into a thin pool

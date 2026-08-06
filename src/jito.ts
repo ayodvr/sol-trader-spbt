@@ -3,233 +3,141 @@ import {
   Keypair,
   SystemProgram,
   PublicKey,
+  Connection,
 } from '@solana/web3.js';
-import bs58 from 'bs58';
-import axios from 'axios';
 import { CONFIG } from '../config.js';
 import pino from 'pino';
 
 const logger = pino({ name: 'jito' });
 
 /**
- * Official Jito tip accounts (rotate randomly)
- * Fetch latest from: https://mainnet.block-engine.jito.wtf/api/v1/bundles
+ * Helius Sender — ultra-low-latency transaction submission, free on all Helius plans
+ * (0 API credits consumed, 50 TPS default). Dual-routes every transaction to both Jito
+ * and staked validator connections server-side, so it gets Jito's inclusion benefits
+ * without being subject to the public Jito block-engine's per-IP rate limit, which this
+ * bot's trade volume was hitting constantly (near-permanent 429 cooldowns in practice).
+ * https://www.helius.dev/docs/sending-transactions/sender
  */
-const JITO_TIP_ACCOUNTS = [
-  'Cw8Fcxv2JxYbBpcC6y9C3T5KkCuKjN3TzGxSqbHYKoAv',
-  '96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5',
-  'HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe',
-  'ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt',
-  'DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyfgGtiT8Qqk',
-  'DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh',
-  'ADaUMVH5N9gMiPhTYDFiM88TBinsLPksi7AMpHJntKoB',
-  '3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT',
+const SENDER_ENDPOINT = 'https://sender.helius-rpc.com/fast';
+const SENDER_MIN_TIP_LAMPORTS = 200_000; // 0.0002 SOL — Sender's documented minimum tip
+
+/** Sender's tip accounts (from the Helius dashboard) — rotate randomly. */
+const SENDER_TIP_ACCOUNTS = [
+  '4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE',
+  'D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ',
+  '9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta',
+  '5VY91ws6B2hMmBFRsXkoAAdsPHBJwRfBht4DXox3xkwn',
+  '2nyhqdwKcJZR2vcqCyrYsaPVdAnFoJjiksCXJ7hfEYgD',
+  '2q5pghRs6arqVjRvT5gfgWfWcHWmw1ZuCzphgd5KfWGJ',
+  'wyvPkWjVZz1M8fHQnMMCDTQDbkManefNNhweYk5WkcF',
+  '3KCKozbAaF75qEU33jtzozcJ29yJuaLJTy2jFdzUY8bT',
+  '4vieeGHPYPG2MmyPRcYjdiDmmhN3ww7hsFNap8pVN3Ey',
+  '4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or',
 ];
 
-function getRandomTipAccount(): PublicKey {
-  const addr = JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)];
+function getRandomSenderTipAccount(): PublicKey {
+  const addr = SENDER_TIP_ACCOUNTS[Math.floor(Math.random() * SENDER_TIP_ACCOUNTS.length)];
   return new PublicKey(addr);
 }
 
-const JITO_ENDPOINTS = [
-  'https://mainnet.block-engine.jito.wtf',
-  'https://amsterdam.mainnet.block-engine.jito.wtf',
-  'https://frankfurt.mainnet.block-engine.jito.wtf',
-  'https://ny.mainnet.block-engine.jito.wtf',
-  'https://tokyo.mainnet.block-engine.jito.wtf',
-];
+// Single shared connection to the Sender endpoint, reused across every submission.
+const senderConnection = new Connection(SENDER_ENDPOINT, 'confirmed');
 
-let lastJitoSubmitTime = 0;
-let endpointIndex = 0;
-let jitoThrottledUntil = 0; // Timestamp until which Jito calls are paused due to 429 rate limit
-
-function getJitoEndpoint(): string {
-  if (CONFIG.JITO_BLOCK_ENGINE && CONFIG.JITO_BLOCK_ENGINE !== 'https://mainnet.block-engine.jito.wtf') {
-    return CONFIG.JITO_BLOCK_ENGINE;
-  }
-  const ep = JITO_ENDPOINTS[endpointIndex % JITO_ENDPOINTS.length];
-  endpointIndex++;
-  return ep;
-}
-
-let jitoQueueChain: Promise<any> = Promise.resolve();
-let jitoSellQueueChain: Promise<any> = Promise.resolve(); // ✅ Fix 4: Separate queue so sell exits never block behind buy cooldowns
-
-/**
- * Atomically reserve the next allowed Jito submission slot and return how many ms to wait
- * before using it (0 if no wait needed). This function contains no `await`, so it runs to
- * completion without yielding — two concurrent callers (the independent buy and sell queue
- * chains both read/write the same lastJitoSubmitTime) can no longer both read a stale value
- * and fire within milliseconds of each other, which was defeating the 1.2s spacing and was
- * a likely contributor to the repeated 429 rate-limit cooldowns.
- */
-function reserveJitoSlot(): number {
-  const now = Date.now();
-  const slot = Math.max(now, lastJitoSubmitTime + 1200);
-  lastJitoSubmitTime = slot;
-  return slot - now;
-}
-
-async function executeSubmitJitoBundle(
+async function executeSubmitViaSender(
   transactions: Transaction[],
   signers: Keypair[],
   tipLamports: number,
-  connection?: any
+  connection?: any,
 ): Promise<string | null> {
   try {
+    // Sender (like the old Jito path) only ever receives a single transaction here — every
+    // call site in this codebase builds exactly one Transaction per buy/sell, so there's no
+    // atomic-bundle requirement to preserve.
+    const baseTx = transactions[transactions.length - 1];
+
+    // Sign the untipped version first and snapshot it — this is what gets broadcast on the
+    // (rare) plain-RPC fallback path below, so a Sender outage never wastes tip lamports on
+    // a transaction that was never actually routed through Sender.
+    for (const tx of transactions) tx.sign(...signers);
+    const untippedRawTx = baseTx.serialize();
+
     if (CONFIG.DRY_RUN) {
       logger.info({
-        bundleSize: transactions.length,
         tip: `${(tipLamports / 1_000_000_000).toFixed(4)} SOL`,
-      }, 'DRY_RUN: Simulating Jito bundle submission');
+      }, 'DRY_RUN: Simulating Sender submission');
       return `dry_run_bundle_${Date.now()}`;
     }
 
-    // ─── Rate Limit Circuit Breaker Check ───
-    // Only attach the Jito tip when we're actually about to try Jito. A tip transfer sent via
-    // plain RPC broadcast buys zero priority there — attaching it unconditionally before this
-    // check meant every trade that fell back to direct RPC during a cooldown window was
-    // silently burning its tip lamports (0.001-0.003 SOL) for nothing.
-    const now = Date.now();
-    const attemptJito = now >= jitoThrottledUntil;
+    const safeTipLamports = Math.max(SENDER_MIN_TIP_LAMPORTS, Math.floor(tipLamports || SENDER_MIN_TIP_LAMPORTS));
+    const tipAccount = getRandomSenderTipAccount();
+    const tipIx = SystemProgram.transfer({
+      fromPubkey: signers[0].publicKey,
+      toPubkey: tipAccount,
+      lamports: safeTipLamports,
+    });
+    tipIx.keys.forEach(k => {
+      if (k.pubkey.equals(tipAccount)) k.isWritable = true;
+    });
 
-    if (attemptJito) {
-      const safeTipLamports = Math.max(100_000, Math.floor(tipLamports || 100_000));
-      const tipAccount = getRandomTipAccount();
-      const tipIx = SystemProgram.transfer({
-        fromPubkey: signers[0].publicKey,
-        toPubkey: tipAccount,
-        lamports: safeTipLamports,
+    baseTx.add(tipIx);
+    baseTx.sign(...signers); // re-sign — instructions changed since the untipped snapshot above
+    const tippedRawTx = baseTx.serialize();
+
+    try {
+      const txid = await senderConnection.sendRawTransaction(tippedRawTx, {
+        skipPreflight: true,
+        maxRetries: 0,
       });
-      // Explicitly guarantee write-lock flag for Jito auction engine
-      tipIx.keys.forEach(k => {
-        if (k.pubkey.equals(tipAccount)) {
-          k.isWritable = true;
-        }
-      });
-      transactions[transactions.length - 1].add(tipIx);
-    } else {
-      const remainingSec = Math.ceil((jitoThrottledUntil - now) / 1000);
-      logger.warn({ remainingSec }, '⚡ Jito in rate-limit cooldown — skipping bundle (no tip attached), routing directly to RPC broadcast');
+      logger.info({ txid, tip: `${(safeTipLamports / 1_000_000_000).toFixed(4)} SOL` }, '✅ Submitted via Helius Sender');
+      return txid;
+    } catch (senderErr: any) {
+      logger.warn({ err: senderErr.message }, '⚠️ Helius Sender submission failed — falling back to plain RPC broadcast (untipped)');
     }
 
-    // Sign now that the final instruction set (with or without the tip) is settled
-    for (const tx of transactions) tx.sign(...signers);
-
-    if (attemptJito) {
-      const serializedTxs = transactions.map((tx) => bs58.encode(tx.serialize()));
-
-      // Try regional endpoints
-      for (let attempt = 0; attempt < 3; attempt++) {
-        // Enforce min 1.2s spacing between Jito API calls from this client (atomic reservation
-        // — see reserveJitoSlot — so this holds even across the separate buy/sell queues)
-        const waitMs = reserveJitoSlot();
-        if (waitMs > 0) {
-          await new Promise(r => setTimeout(r, waitMs));
-        }
-
-        const targetEndpoint = getJitoEndpoint();
-
-        try {
-          logger.info({
-            bundleSize: serializedTxs.length,
-            tip: `${(tipLamports / 1_000_000_000).toFixed(4)} SOL`,
-            endpoint: targetEndpoint,
-            attempt: attempt + 1,
-          }, 'Submitting Jito bundle');
-
-          const response = await axios.post(
-            `${targetEndpoint}/api/v1/bundles`,
-            {
-              jsonrpc: '2.0',
-              id: 1,
-              method: 'sendBundle',
-              params: [serializedTxs],
-            },
-            {
-              headers: { 'Content-Type': 'application/json' },
-              timeout: 10_000,
-            }
-          );
-
-          const bundleId = response.data?.result;
-          if (bundleId) {
-            logger.info({ bundleId, endpoint: targetEndpoint }, '✅ Bundle submitted');
-            return bundleId;
-          }
-
-          // Check if response contains rate limit error structure
-          const errCode = response.data?.error?.code;
-          if (errCode === -32097 || response.status === 429) {
-            jitoThrottledUntil = Date.now() + 60_000;
-            logger.warn({ endpoint: targetEndpoint, cooldownSec: 60 }, '⚡ Jito 429 Rate limit detected — activating 60s cooldown and falling back to RPC');
-            break; // Stop attempting other Jito endpoints (rate limit is per IP)
-          }
-
-          logger.warn({ response: response.data, endpoint: targetEndpoint }, 'Jito endpoint returned non-bundle result — retrying next region');
-        } catch (err: any) {
-          const statusCode = err.response?.status;
-          const is429 = statusCode === 429 || err.response?.data?.error?.code === -32097;
-          if (is429) {
-            jitoThrottledUntil = Date.now() + 60_000;
-            logger.warn({ endpoint: targetEndpoint, cooldownSec: 60 }, '⚡ Jito 429 Rate limit detected — activating 60s cooldown and falling back to RPC');
-            break; // Stop attempting other Jito endpoints
-          }
-          logger.warn({ err: err.message, response: err.response?.data, endpoint: targetEndpoint }, 'Jito endpoint error — retrying next region');
-        }
-      }
-    }
-
-    // ─── Direct RPC Fallback ───
+    // ─── Last-resort fallback: plain RPC broadcast, no tip (Sender never saw this attempt) ───
     if (connection) {
       try {
-        logger.info('⚡ Executing direct RPC transaction broadcast fallback');
-        const tx = transactions[0];
-        const rawTx = tx.serialize();
-        const txid = await connection.sendRawTransaction(rawTx, {
+        const txid = await connection.sendRawTransaction(untippedRawTx, {
           skipPreflight: true,
           maxRetries: 3,
         });
-        logger.info({ txid }, '✅ Buy transaction broadcasted directly via RPC fallback');
+        logger.info({ txid }, '✅ Broadcasted via plain RPC fallback');
         return txid;
       } catch (rpcErr: any) {
-        logger.error({ err: rpcErr.message }, '❌ Direct RPC fallback submission failed');
+        logger.error({ err: rpcErr.message }, '❌ Plain RPC fallback also failed');
       }
     }
 
-    logger.error('❌ All Jito regional bundle submission attempts failed');
+    logger.error('❌ Sender submission and RPC fallback both failed');
     return null;
   } catch (err: any) {
-    logger.error({ err: err.message }, 'Jito bundle serialization error');
+    logger.error({ err: err.message }, 'Transaction submission error');
     return null;
   }
 }
 
 /**
- * Submit a bundle of transactions to Jito's block engine.
- * All transactions execute atomically and in order.
- * Uses a serial promise queue to strictly enforce 1.1s spacing between requests.
- * Sell transactions use a SEPARATE queue so they are never blocked behind buy cooldowns.
+ * Submit a buy/sell transaction via Helius Sender (dual-routes to Jito + staked validators),
+ * falling back to a plain RPC broadcast only if Sender itself is unreachable.
+ *
+ * `isSell` is accepted for call-site compatibility but no longer changes routing — the old
+ * separate buy/sell promise queues existed purely to protect the public Jito endpoint's rate
+ * limit, which Sender isn't subject to at this bot's volume. Every call now fires immediately.
  */
 export async function submitJitoBundle(
   transactions: Transaction[],
   signers: Keypair[],
   tipLamports: number = CONFIG.JITO_TIP_LAMPORTS,
   connection?: any,
-  isSell: boolean = false // ✅ Fix 4: route sells through separate queue
+  isSell: boolean = false
 ): Promise<string | null> {
-  if (isSell) {
-    const task = jitoSellQueueChain.then(() => executeSubmitJitoBundle(transactions, signers, tipLamports, connection));
-    jitoSellQueueChain = task.catch(() => { });
-    return task;
-  }
-  const task = jitoQueueChain.then(() => executeSubmitJitoBundle(transactions, signers, tipLamports, connection));
-  jitoQueueChain = task.catch(() => { });
-  return task;
+  return executeSubmitViaSender(transactions, signers, tipLamports, connection);
 }
 
 /**
- * Poll for bundle/transaction confirmation status across both Solana RPC and Jito block engines.
+ * Poll for on-chain confirmation of a transaction signature.
+ * Every submission path here (Helius Sender, plain RPC fallback) returns a real base58
+ * transaction signature — never a Jito bundle UUID — so this only needs to poll RPC.
  */
 export async function waitForBundleConfirmation(
   bundleId: string,
@@ -242,70 +150,23 @@ export async function waitForBundleConfirmation(
     return 'confirmed';
   }
 
-  // A real Jito bundle ID is a UUID (contains dashes); connection.getSignatureStatus() only
-  // makes sense for an actual base58 transaction signature, which is what the direct-RPC
-  // fallback path in executeSubmitJitoBundle returns instead. Skip the doomed lookup otherwise
-  // rather than burning an RPC call every poll tick for a value that can never match.
-  const looksLikeTxSignature = !bundleId.includes('-');
+  if (!connection) return 'pending';
 
   for (let i = 0; i < maxRetries; i++) {
-    // 1. Primary check: Check Solana RPC signature status if connection is provided
-    if (connection && looksLikeTxSignature) {
-      try {
-        const sigStatus = await connection.getSignatureStatus(bundleId);
-        const confStatus = sigStatus.value?.confirmationStatus;
-        if (confStatus === 'confirmed' || confStatus === 'finalized') {
-          logger.info({ bundleId, confStatus }, '✅ Transaction confirmed on-chain via RPC');
-          return 'confirmed';
-        }
-        if (sigStatus.value?.err) {
-          logger.error({ bundleId, err: sigStatus.value.err }, '❌ Transaction failed on-chain');
-          return 'failed';
-        }
-      } catch {
-        // Transient RPC error — proceed to Jito check if enabled
+    try {
+      const sigStatus = await connection.getSignatureStatus(bundleId);
+      const confStatus = sigStatus.value?.confirmationStatus;
+      if (confStatus === 'confirmed' || confStatus === 'finalized') {
+        logger.info({ bundleId, confStatus }, '✅ Transaction confirmed on-chain');
+        return 'confirmed';
       }
-    }
-
-    // 2. Secondary check: Query SINGLE Jito endpoint only if not throttled
-    if (Date.now() >= jitoThrottledUntil) {
-      try {
-        const primaryEndpoint = JITO_ENDPOINTS[0];
-        const response = await axios.post(
-          `${primaryEndpoint}/api/v1/bundles`,
-          {
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'getBundleStatuses',
-            params: [[bundleId]],
-          },
-          { timeout: 3_000 }
-        );
-
-        const val = response.data?.result?.value?.[0];
-        if (val) {
-          const statusStr = (val.status || '').toLowerCase();
-          const confStatus = (val.confirmation_status || '').toLowerCase();
-
-          if (
-            statusStr === 'landed' ||
-            statusStr === 'confirmed' ||
-            statusStr === 'finalized' ||
-            confStatus === 'confirmed' ||
-            confStatus === 'finalized'
-          ) {
-            return 'confirmed';
-          }
-          if (statusStr === 'failed') return 'failed';
-        }
-      } catch (err: any) {
-        if (err.response?.status === 429 || err.response?.data?.error?.code === -32097) {
-          jitoThrottledUntil = Date.now() + 60_000;
-          logger.warn('⚡ Jito rate-limited during status check — pausing Jito status queries for 60s');
-        }
+      if (sigStatus.value?.err) {
+        logger.error({ bundleId, err: sigStatus.value.err }, '❌ Transaction failed on-chain');
+        return 'failed';
       }
+    } catch {
+      // Transient RPC error — keep polling
     }
-
     await new Promise(r => setTimeout(r, delayMs));
   }
   return 'pending';
