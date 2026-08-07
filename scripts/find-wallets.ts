@@ -36,6 +36,7 @@ import { watchAmmPoolCreations, AmmPoolInfo } from '../src/pumpswap.js';
 const logger = pino({ name: 'find-wallets' });
 
 const GRADUATED_FILE = path.resolve('./data/graduated-tokens.json');
+const SCAN_STATE_FILE = path.resolve('./data/scan-state.json');
 const CANDIDATES_FILE = path.resolve('./watchlist-candidates.json');
 const HELIUS_BASE = 'https://api.helius.xyz/v0/addresses';
 const WSOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -187,8 +188,26 @@ async function scoreWallet(address: string): Promise<WalletScore | null> {
   return { closedTrades, wins, winRate: wins / closedTrades, avgHoldMinutes: holdMinutesSum / closedTrades, oldestActivityDays };
 }
 
+interface ScanState {
+  scannedMints: string[];
+  appearances: Record<string, string[]>;
+}
+
+function loadScanState(): { scannedMints: Set<string>; appearances: Map<string, Set<string>> } {
+  const raw = loadJson<ScanState>(SCAN_STATE_FILE, { scannedMints: [], appearances: {} });
+  const appearances = new Map<string, Set<string>>();
+  for (const [wallet, mints] of Object.entries(raw.appearances)) appearances.set(wallet, new Set(mints));
+  return { scannedMints: new Set(raw.scannedMints), appearances };
+}
+
+function saveScanState(scannedMints: Set<string>, appearances: Map<string, Set<string>>): void {
+  const appearancesObj: Record<string, string[]> = {};
+  for (const [wallet, mints] of appearances) appearancesObj[wallet] = Array.from(mints);
+  saveJson(SCAN_STATE_FILE, { scannedMints: Array.from(scannedMints), appearances: appearancesObj });
+}
+
 async function runAnalyze(opts: {
-  minAppearances: number; minTrades: number; minWinRate: number; maxHoldMinutes: number; maxCandidates: number; minAgeDays: number;
+  minAppearances: number; minTrades: number; minWinRate: number; maxHoldMinutes: number; maxCandidates: number; minAgeDays: number; batchSize: number;
 }): Promise<void> {
   const graduated: Array<{ mint: string }> = loadJson(GRADUATED_FILE, []);
   if (graduated.length === 0) {
@@ -200,16 +219,37 @@ async function runAnalyze(opts: {
     return;
   }
 
-  logger.info({ tokens: graduated.length }, '🔍 Scanning early buyers of graduated tokens...');
+  // Early-buyer scanning is resumable and incremental: mints already scanned in a previous
+  // `analyze` run are skipped, and the accumulated wallet-appearance data persists across runs.
+  // pump.fun's graduation rate turned out far higher than expected (4,300+ in a single 3-hour
+  // window) — scanning that in one uninterrupted pass would take hours and hammer Helius, so
+  // each run only processes up to <batchSize> new mints. Re-run `analyze` repeatedly to chew
+  // through the backlog; progress is saved after every mint, so Ctrl+C loses nothing.
+  const { scannedMints, appearances } = loadScanState();
+  const unscanned = graduated.filter(g => !scannedMints.has(g.mint));
+  const batch = unscanned.slice(0, opts.batchSize);
 
-  const appearances = new Map<string, Set<string>>(); // wallet -> set of graduated mints they bought early
-  for (const g of graduated) {
+  logger.info(
+    { totalGraduated: graduated.length, alreadyScanned: scannedMints.size, thisBatch: batch.length, remainingAfter: unscanned.length - batch.length },
+    '🔍 Scanning early buyers of graduated tokens...'
+  );
+
+  for (const g of batch) {
     const buyers = await getEarlyBuyers(g.mint);
     for (const b of buyers) {
       if (!appearances.has(b)) appearances.set(b, new Set());
       appearances.get(b)!.add(g.mint);
     }
+    scannedMints.add(g.mint);
+    saveScanState(scannedMints, appearances);
     await sleep(350);
+  }
+
+  if (unscanned.length - batch.length > 0) {
+    logger.warn(
+      { remaining: unscanned.length - batch.length },
+      '⏳ Batch limit reached — re-run `analyze` again to continue scanning the rest (progress is saved)'
+    );
   }
 
   const repeatWallets = Array.from(appearances.entries())
@@ -300,15 +340,18 @@ if (mode === 'collect') {
     maxHoldMinutes: parseFloat(argMap['max-hold'] || '20'),
     maxCandidates: parseInt(argMap['max-candidates'] || '40', 10),
     minAgeDays: parseFloat(argMap['min-age-days'] || '14'),
+    batchSize: parseInt(argMap['batch-size'] || '300', 10),
   });
 } else {
   console.log(`Usage:
   npx tsx scripts/find-wallets.ts collect [--minutes=120]
       Listen for PumpSwap graduations and record them to data/graduated-tokens.json
 
-  npx tsx scripts/find-wallets.ts analyze [--min-appearances=2] [--min-trades=8] [--min-winrate=0.55] [--max-hold=20] [--max-candidates=40] [--min-age-days=14]
+  npx tsx scripts/find-wallets.ts analyze [--min-appearances=2] [--min-trades=8] [--min-winrate=0.55] [--max-hold=20] [--max-candidates=40] [--min-age-days=14] [--batch-size=300]
       Find wallets that bought early on multiple graduated tokens, score their trade
-      history, and write qualifying candidates to watchlist-candidates.json
+      history, and write qualifying candidates to watchlist-candidates.json.
+      Scans up to <batch-size> new graduated tokens per run and saves progress —
+      re-run repeatedly to work through a large backlog.
 `);
   process.exit(1);
 }
