@@ -10,7 +10,8 @@
     "build:native": "cd native-builder && npm install && npm run build",
     "prod": "node dist/index.js",
     "sweep": "tsx scripts/sweep-all.ts",
-    "benchmark": "tsx src/benchmark.ts"
+    "benchmark": "tsx src/benchmark.ts",
+    "find-wallets": "tsx scripts/find-wallets.ts"
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.12",
