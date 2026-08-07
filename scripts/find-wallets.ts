@@ -116,7 +116,7 @@ async function getEarlyBuyers(mint: string): Promise<string[]> {
     all = all.concat(txs);
     before = txs[txs.length - 1]?.signature;
     if (txs.length < 100) break; // reached the start of this address's history
-    await sleep(300);
+    await sleep(600);
   }
   if (all.length === 0) return [];
 
@@ -242,7 +242,7 @@ async function runAnalyze(opts: {
     }
     scannedMints.add(g.mint);
     saveScanState(scannedMints, appearances);
-    await sleep(350);
+    await sleep(600);
   }
 
   if (unscanned.length - batch.length > 0) {
@@ -262,7 +262,7 @@ async function runAnalyze(opts: {
   const results: Array<{ address: string; appearances: number; mints: Set<string> } & WalletScore> = [];
   for (const [address, mints] of repeatWallets) {
     const stat = await scoreWallet(address);
-    await sleep(350);
+    await sleep(600);
     if (!stat) continue;
     if (stat.closedTrades < opts.minTrades) continue;
     if (stat.winRate < opts.minWinRate) continue;
