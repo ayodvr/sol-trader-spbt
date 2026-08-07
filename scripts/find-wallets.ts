@@ -65,12 +65,16 @@ async function heliusGet(url: string, retries = 3): Promise<any[]> {
     } catch (err: any) {
       const status = err.response?.status;
       if (status === 429 && attempt < retries) {
-        const delay = 1000 * Math.pow(2, attempt);
-        logger.warn({ delay }, 'Helius rate limited — backing off');
+        const delay = 2000 * Math.pow(2, attempt);
+        logger.debug({ delay, attempt }, 'Helius rate limited — backing off');
         await sleep(delay);
         continue;
       }
-      logger.debug({ err: err.message }, 'Helius request failed');
+      if (status === 429) {
+        logger.warn('Helius still rate limited after all retries — skipping this request');
+      } else {
+        logger.debug({ err: err.message }, 'Helius request failed');
+      }
       return [];
     }
   }
@@ -116,7 +120,7 @@ async function getEarlyBuyers(mint: string): Promise<string[]> {
     all = all.concat(txs);
     before = txs[txs.length - 1]?.signature;
     if (txs.length < 100) break; // reached the start of this address's history
-    await sleep(600);
+    await sleep(1200);
   }
   if (all.length === 0) return [];
 
@@ -242,7 +246,7 @@ async function runAnalyze(opts: {
     }
     scannedMints.add(g.mint);
     saveScanState(scannedMints, appearances);
-    await sleep(600);
+    await sleep(1200);
   }
 
   if (unscanned.length - batch.length > 0) {
@@ -262,7 +266,7 @@ async function runAnalyze(opts: {
   const results: Array<{ address: string; appearances: number; mints: Set<string> } & WalletScore> = [];
   for (const [address, mints] of repeatWallets) {
     const stat = await scoreWallet(address);
-    await sleep(600);
+    await sleep(1200);
     if (!stat) continue;
     if (stat.closedTrades < opts.minTrades) continue;
     if (stat.winRate < opts.minWinRate) continue;
