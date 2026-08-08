@@ -42,6 +42,7 @@ export class GrpcWatcher {
   private seenTokens: Set<string> = new Set();
   private createDiagnosticCount: number = 0;
   private pumpIxDiagnosticCount: number = 0;
+  private dispatchDiagnosticCount: number = 0;
   private readonly SEEN_TOKENS_MAX = 10_000;
   private readonly SEEN_TOKENS_EVICT = 1_000;
   private lastSlot: number = 0;
@@ -316,6 +317,22 @@ export class GrpcWatcher {
     }
 
     const allInstructions = [...instructions, ...innerInstructions];
+
+    // TEMP DIAGNOSTIC — processPumpInstruction's own entry-point diagnostic never fired at all,
+    // meaning it's never even being called — the bug is in dispatch, not inside that function.
+    // Log every resolved programId for the first several transactions to see what's actually
+    // coming through and whether resolveProgramId is finding PUMP_PROGRAM_ID at all.
+    if (this.dispatchDiagnosticCount < 15) {
+      this.dispatchDiagnosticCount++;
+      const resolved = allInstructions.map(ix => this.resolveProgramId(ix, tx.message));
+      logger.warn({
+        totalInstructions: allInstructions.length,
+        topLevel: instructions.length,
+        inner: innerInstructions.length,
+        resolvedProgramIds: resolved,
+        pumpProgramExpected: CONFIG.PUMP_PROGRAM_ID.toBase58(),
+      }, '🔬 DIAGNOSTIC: transaction instruction dispatch');
+    }
 
     for (const ix of allInstructions) {
       const programId = this.resolveProgramId(ix, tx.message);
