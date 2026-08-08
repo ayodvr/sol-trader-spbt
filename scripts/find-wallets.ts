@@ -267,10 +267,21 @@ async function runAnalyze(opts: {
   for (const [address, mints] of repeatWallets) {
     const stat = await scoreWallet(address);
     await sleep(1200);
-    if (!stat) continue;
-    if (stat.closedTrades < opts.minTrades) continue;
-    if (stat.winRate < opts.minWinRate) continue;
-    if (stat.avgHoldMinutes > opts.maxHoldMinutes) continue;
+    if (!stat) {
+      logger.info({ address: address.slice(0, 8) }, '⚪ No reconstructable closed trades at all — skipped');
+      continue;
+    }
+    // Log every scored candidate's raw numbers, pass or fail — otherwise a zero-qualified
+    // result is a black box: no way to tell "criteria too strict" from "nobody scores well".
+    const failReasons: string[] = [];
+    if (stat.closedTrades < opts.minTrades) failReasons.push(`closedTrades ${stat.closedTrades}<${opts.minTrades}`);
+    if (stat.winRate < opts.minWinRate) failReasons.push(`winRate ${(stat.winRate * 100).toFixed(0)}%<${(opts.minWinRate * 100).toFixed(0)}%`);
+    if (stat.avgHoldMinutes > opts.maxHoldMinutes) failReasons.push(`avgHold ${stat.avgHoldMinutes.toFixed(1)}m>${opts.maxHoldMinutes}m`);
+
+    if (failReasons.length > 0) {
+      logger.info({ address: address.slice(0, 8), ...stat, failReasons }, '❌ Candidate scored but did not qualify');
+      continue;
+    }
     results.push({ address, appearances: mints.size, mints, ...stat });
     logger.info({ address: address.slice(0, 8), ...stat }, '✅ Candidate qualifies');
   }
