@@ -41,6 +41,7 @@ export class GrpcWatcher {
   private stream: any = null;
   private seenTokens: Set<string> = new Set();
   private createDiagnosticCount: number = 0;
+  private pumpIxDiagnosticCount: number = 0;
   private readonly SEEN_TOKENS_MAX = 10_000;
   private readonly SEEN_TOKENS_EVICT = 1_000;
   private lastSlot: number = 0;
@@ -339,6 +340,19 @@ export class GrpcWatcher {
 
   private processPumpInstruction(ix: any, message: any, slot: number): void {
     const data = this.getInstructionData(ix);
+    // TEMP DIAGNOSTIC — "New token detected" has never fired in the entire log history despite
+    // heavy launch volume, meaning CREATE detection is silently dead somewhere in this function.
+    // Log every pump-program instruction we actually receive (matched or not) to find where.
+    if (this.pumpIxDiagnosticCount < 20) {
+      this.pumpIxDiagnosticCount++;
+      logger.warn({
+        hasData: !!ix.data,
+        dataType: typeof ix.data,
+        decodedLength: data?.length ?? null,
+        discriminatorHex: data && data.length >= 8 ? data.subarray(0, 8).toString('hex') : null,
+        expectedHex: CREATE_DISCRIMINATOR.toString('hex'),
+      }, '🔬 DIAGNOSTIC: pump-program instruction seen');
+    }
     if (!data || data.length < 8) return;
 
     const discriminator = data.subarray(0, 8);
