@@ -114,7 +114,7 @@ async function getEarlyBuyers(mint: string): Promise<string[]> {
   let before: string | undefined;
   let all: any[] = [];
   for (let page = 0; page < 3; page++) {
-    const url = `${HELIUS_BASE}/${bondingCurve}/transactions?api-key=${CONFIG.HELIUS_API_KEY}&limit=100${before ? `&before=${before}` : ''}`;
+    const url = `${HELIUS_BASE}/${bondingCurve}/transactions?api-key=${CONFIG.WALLET_FINDER_HELIUS_API_KEY}&limit=100${before ? `&before=${before}` : ''}`;
     const txs = await heliusGet(url);
     if (txs.length === 0) break;
     all = all.concat(txs);
@@ -147,7 +147,7 @@ interface WalletScore {
 }
 
 async function scoreWallet(address: string): Promise<WalletScore | null> {
-  const url = `${HELIUS_BASE}/${address}/transactions?api-key=${CONFIG.HELIUS_API_KEY}&limit=100`;
+  const url = `${HELIUS_BASE}/${address}/transactions?api-key=${CONFIG.WALLET_FINDER_HELIUS_API_KEY}&limit=100`;
   const txs = await heliusGet(url);
   if (txs.length === 0) return null;
 
@@ -218,8 +218,8 @@ async function runAnalyze(opts: {
     logger.error('No graduated tokens recorded yet — run `collect` first and let it run for a while.');
     return;
   }
-  if (!CONFIG.HELIUS_API_KEY) {
-    logger.error('HELIUS_API_KEY not set in .env — required for this step.');
+  if (!CONFIG.WALLET_FINDER_HELIUS_API_KEY) {
+    logger.error('WALLET_FINDER_HELIUS_API_KEY (or HELIUS_API_KEY as fallback) not set in .env — required for this step.');
     return;
   }
 

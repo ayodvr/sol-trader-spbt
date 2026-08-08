@@ -47,6 +47,11 @@ export const CONFIG = {
   MIN_RUG_SCORE: parseInt(process.env.MIN_RUG_SCORE || '75'),
   MIN_DEV_HISTORY_SCORE: parseInt(process.env.MIN_DEV_HISTORY_SCORE || '50'),
   HELIUS_API_KEY: process.env.HELIUS_API_KEY || '',  // Used for dev history check
+  // scripts/find-wallets.ts (offline research tool) is a heavy Enhanced-API consumer that once
+  // exhausted this same key's shared credit pool and silently degraded the live bot's dev-history/
+  // coordinated-pump checks. Give it its own key so the two never compete again — falls back to
+  // HELIUS_API_KEY only if a dedicated key hasn't been set.
+  WALLET_FINDER_HELIUS_API_KEY: process.env.WALLET_FINDER_HELIUS_API_KEY || process.env.HELIUS_API_KEY || '',
   BIRDEYE_API_KEY: process.env.BIRDEYE_API_KEY || '', // Legacy — kept for compatibility
 
   // Exit triggers
