@@ -95,16 +95,19 @@ export class RugAnalyzer {
     // curve account instead — every graduated token still has one on-chain, and this exact byte
     // offset (32-64) is already proven correct elsewhere in this codebase (sell.ts's
     // readCreator(), used successfully on every bonding-curve sell all session).
+    // This now applies to BOTH tracks. The bonding-curve track's creator was equally unreliable:
+    // it came from a fixed account index in the gRPC create instruction, but those are versioned
+    // transactions using Address Lookup Tables, so that slot usually resolved to garbage — which
+    // is what filled rug-db.json with hundreds of corrupted "1111111113fGWZbwwxFB…" entries.
+    // The curve account is the one authoritative source for either track.
     let effectiveCreator = creator;
-    if (isAmm) {
-      try {
-        const bondingCurve = deriveBondingCurve(mint);
-        const curveAcc = await withRpcRetry(() => this.connection.getAccountInfo(bondingCurve));
-        if (curveAcc && curveAcc.data.length >= 64) {
-          effectiveCreator = new PublicKey(curveAcc.data.subarray(32, 64));
-        }
-      } catch { /* fall back to whatever was passed in, if anything */ }
-    }
+    try {
+      const curveAddr = isAmm ? deriveBondingCurve(mint) : bondingCurveOrPool;
+      const curveAcc = await withRpcRetry(() => this.connection.getAccountInfo(curveAddr));
+      if (curveAcc && curveAcc.data.length >= 64) {
+        effectiveCreator = new PublicKey(curveAcc.data.subarray(32, 64));
+      }
+    } catch { /* fall back to whatever was passed in, if anything */ }
 
     const result: RugCheckResult = {
       safe: false,

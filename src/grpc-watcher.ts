@@ -25,7 +25,12 @@ type SubscribeRequest = any;
 
 const logger = pino({ name: 'grpc-watcher' });
 
-const CREATE_DISCRIMINATOR = Buffer.from([24, 30, 200, 40, 5, 28, 7, 119]);
+// pump.fun's create instruction discriminator. The previous value ([24,30,200,40,5,28,7,119] =
+// 181ec828051c0777) no longer appears in the live stream at all, while buy/sell still match
+// their documented values exactly — pump.fun changed it. Confirmed against mainnet traffic:
+// every instruction carrying this discriminator has a freshly-minted "...pump" address at
+// account index 0 and 122-239 bytes of data (the embedded name/symbol/uri strings).
+const CREATE_DISCRIMINATOR = Buffer.from([0xd6, 0x90, 0x4c, 0xec, 0x5f, 0x8b, 0x31, 0xb4]);
 const SOLANA_SLOT_TIME_MS = 400;
 
 /**
@@ -40,8 +45,6 @@ export class GrpcWatcher {
   private client: Client | null = null;
   private stream: any = null;
   private seenTokens: Set<string> = new Set();
-  private createDiagnosticCount: number = 0;
-  private createHuntCount: number = 0;
   private discriminatorCounts: Map<string, number> = new Map();
   private lastDiscriminatorLog: number = 0;
   private readonly SEEN_TOKENS_MAX = 10_000;
@@ -389,50 +392,28 @@ export class GrpcWatcher {
       }, '🔬 DIAGNOSTIC: pump discriminator histogram (30s)');
     }
 
-    // TEMP DIAGNOSTIC — the configured CREATE discriminator never appears in the live stream,
-    // while buy/sell match their known values exactly, so pump.fun's create instruction now
-    // carries a different discriminator. Identify it by shape rather than guesswork: a create
-    // carries name/symbol/uri strings so its data is long, unlike a 24-byte buy/sell, and its
-    // accounts include the freshly minted "...pump" address. Skip the Anchor event-CPI marker
-    // (e445a52e51cb9a1d), which is a log record rather than a real instruction.
-    if (data.length > 100 && hex !== 'e445a52e51cb9a1d' && this.createHuntCount < 8) {
-      this.createHuntCount++;
-      const accts = this.resolveAccounts(ix, message);
-      logger.warn({
-        discriminatorHex: hex,
-        dataLength: data.length,
-        accountsLength: accts.length,
-        accounts: accts,
-      }, '🔬 DIAGNOSTIC: long-data pump instruction (create candidate)');
-    }
-
     if (!discriminator.equals(CREATE_DISCRIMINATOR)) return;
 
     const accounts = this.resolveAccounts(ix, message);
-    // Log rejections too — otherwise a CREATE that arrives but has an unexpected account count
-    // would be dropped here as silently as the envelope bug dropped everything upstream.
-    if (accounts.length < 7) {
-      logger.warn({ accountsLength: accounts.length, accounts }, '🔬 DIAGNOSTIC: CREATE seen but too few accounts — rejected');
-      return;
-    }
+    if (accounts.length < 1) return;
 
+    // Only account index 0 (the mint) is read positionally, and it's a static signer key that
+    // always resolves. Everything else is derived rather than indexed: these are versioned
+    // transactions using Address Lookup Tables, so most account slots resolve to 'unknown'
+    // here — the ALT-loaded addresses live in meta, not in the static key list. Reading the
+    // creator from a fixed index is exactly what produced the corrupted "1111111113fGWZbwwxFB…"
+    // addresses filling rug-db.json. The bonding curve is a deterministic PDA of the mint, and
+    // the real creator is read from that account by the analyzer (offset 32-64).
     const mintAddress = accounts[0];
-    const creatorAddress = accounts[6];
-    const bondingCurveAddress = accounts[1];
+    if (!mintAddress || mintAddress === 'unknown') return;
 
-    // TEMP DIAGNOSTIC — trade-history.json shows most recorded creators sharing an identical,
-    // clearly-corrupted prefix ("1111111113fGWZbwwxFB..."), meaning accounts[6] is very likely
-    // the wrong index for this instruction shape (or resolveAccounts is mis-resolving it). Log
-    // the full resolved account list for the first several CREATEs after each restart so we can
-    // see real data instead of guessing. Remove once the real index/bug is confirmed and fixed.
-    if (this.createDiagnosticCount < 10) {
-      this.createDiagnosticCount++;
-      logger.warn({
-        mint: mintAddress,
-        accountsLength: accounts.length,
-        accounts,
-        creatorAtIndex6: creatorAddress,
-      }, '🔬 DIAGNOSTIC: CREATE instruction accounts dump');
+    let mintPubkey: PublicKey;
+    let bondingCurvePubkey: PublicKey;
+    try {
+      mintPubkey = new PublicKey(mintAddress);
+      bondingCurvePubkey = deriveBondingCurve(mintPubkey);
+    } catch {
+      return;
     }
 
     if (this.seenTokens.has(mintAddress)) return;
@@ -445,16 +426,18 @@ export class GrpcWatcher {
     }
 
     const event: NewTokenEvent = {
-      mint: new PublicKey(mintAddress),
-      bondingCurve: new PublicKey(bondingCurveAddress),
-      creator: new PublicKey(creatorAddress),
+      mint: mintPubkey,
+      bondingCurve: bondingCurvePubkey,
+      // Placeholder only — the analyzer reads the authoritative creator straight off the
+      // bonding curve account, and index.ts prefers rugCheck.creator over this field.
+      creator: mintPubkey,
       slot,
       timestamp: Date.now(),
     };
 
     logger.info({
       mint: mintAddress,
-      creator: creatorAddress?.slice(0, 8) + '...',
+      bondingCurve: bondingCurvePubkey.toBase58(),
       slot,
     }, '⚡ [gRPC] NEW TOKEN DETECTED');
 
