@@ -127,23 +127,23 @@ export class GrpcWatcher {
     if (!this.stream || !this.isRunning) return;
     const pools = Array.from(this.trackedPools);
     try {
-      this.stream.write({
-        slots: {},
-        accounts: pools.length > 0 ? {
-          pool_exit_monitor: {
-            account: pools,
-            owner: [],
-            filters: [],
-          }
-        } : {},
-        transactions: {},
-        transactionsStatus: {},
-        blocks: {},
-        blocksMeta: {},
-        entry: {},
-        accountsDataSlice: [],
-        commitment: 0,
-      });
+      // A SubscribeRequest REPLACES the whole subscription — it is not additive. The previous
+      // version sent `transactions: {}`, `slots: {}` and `blocksMeta: {}`, so the first time an
+      // AMM position registered a pool monitor it silently tore down bonding-curve transaction
+      // streaming (and the blockhash cache feed) for the rest of the process's life. Always
+      // resend the full base request and layer the pool-account filter on top of it.
+      const request: any = this.buildSubscribeRequest();
+      request.accounts = pools.length > 0 ? {
+        pool_exit_monitor: {
+          account: pools,
+          owner: [],
+          filters: [],
+        }
+      } : {};
+      // Don't replay history on a mid-flight filter update — that would refire a burst of
+      // already-processed slots every time a position opens or closes.
+      delete request.fromSlot;
+      this.stream.write(request);
     } catch (err: any) {
       logger.debug({ err: err.message }, 'updatePoolSubscription write failed (stream closed)');
     }
