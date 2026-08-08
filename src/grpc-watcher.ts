@@ -40,6 +40,7 @@ export class GrpcWatcher {
   private client: Client | null = null;
   private stream: any = null;
   private seenTokens: Set<string> = new Set();
+  private createDiagnosticCount: number = 0;
   private readonly SEEN_TOKENS_MAX = 10_000;
   private readonly SEEN_TOKENS_EVICT = 1_000;
   private lastSlot: number = 0;
@@ -349,6 +350,21 @@ export class GrpcWatcher {
     const mintAddress = accounts[0];
     const creatorAddress = accounts[6];
     const bondingCurveAddress = accounts[1];
+
+    // TEMP DIAGNOSTIC — trade-history.json shows most recorded creators sharing an identical,
+    // clearly-corrupted prefix ("1111111113fGWZbwwxFB..."), meaning accounts[6] is very likely
+    // the wrong index for this instruction shape (or resolveAccounts is mis-resolving it). Log
+    // the full resolved account list for the first several CREATEs after each restart so we can
+    // see real data instead of guessing. Remove once the real index/bug is confirmed and fixed.
+    if (this.createDiagnosticCount < 10) {
+      this.createDiagnosticCount++;
+      logger.warn({
+        mint: mintAddress,
+        accountsLength: accounts.length,
+        accounts,
+        creatorAtIndex6: creatorAddress,
+      }, '🔬 DIAGNOSTIC: CREATE instruction accounts dump');
+    }
 
     if (this.seenTokens.has(mintAddress)) return;
     this.seenTokens.add(mintAddress);
