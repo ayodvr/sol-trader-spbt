@@ -41,6 +41,7 @@ export class GrpcWatcher {
   private stream: any = null;
   private seenTokens: Set<string> = new Set();
   private createDiagnosticCount: number = 0;
+  private createHuntCount: number = 0;
   private discriminatorCounts: Map<string, number> = new Map();
   private lastDiscriminatorLog: number = 0;
   private readonly SEEN_TOKENS_MAX = 10_000;
@@ -386,6 +387,23 @@ export class GrpcWatcher {
         counts: Object.fromEntries(this.discriminatorCounts),
         createExpected: CREATE_DISCRIMINATOR.toString('hex'),
       }, '🔬 DIAGNOSTIC: pump discriminator histogram (30s)');
+    }
+
+    // TEMP DIAGNOSTIC — the configured CREATE discriminator never appears in the live stream,
+    // while buy/sell match their known values exactly, so pump.fun's create instruction now
+    // carries a different discriminator. Identify it by shape rather than guesswork: a create
+    // carries name/symbol/uri strings so its data is long, unlike a 24-byte buy/sell, and its
+    // accounts include the freshly minted "...pump" address. Skip the Anchor event-CPI marker
+    // (e445a52e51cb9a1d), which is a log record rather than a real instruction.
+    if (data.length > 100 && hex !== 'e445a52e51cb9a1d' && this.createHuntCount < 8) {
+      this.createHuntCount++;
+      const accts = this.resolveAccounts(ix, message);
+      logger.warn({
+        discriminatorHex: hex,
+        dataLength: data.length,
+        accountsLength: accts.length,
+        accounts: accts,
+      }, '🔬 DIAGNOSTIC: long-data pump instruction (create candidate)');
     }
 
     if (!discriminator.equals(CREATE_DISCRIMINATOR)) return;
