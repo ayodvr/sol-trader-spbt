@@ -101,11 +101,17 @@ export class RugAnalyzer {
     // is what filled rug-db.json with hundreds of corrupted "1111111113fGWZbwwxFB…" entries.
     // The curve account is the one authoritative source for either track.
     let effectiveCreator = creator;
+    // Reused by Check 2 below instead of re-fetching the identical account. On the bonding-curve
+    // track curveAddr === bondingCurveOrPool, so without this every candidate cost two identical
+    // getAccountInfo calls — meaningful when RPC quota is the binding constraint and detection
+    // runs at ~70 tokens/minute.
+    let cachedCurveAccount: Awaited<ReturnType<Connection['getAccountInfo']>> = null;
     try {
       const curveAddr = isAmm ? deriveBondingCurve(mint) : bondingCurveOrPool;
       // 'processed' for the same reason as the mint fetch below — a curve account created
       // milliseconds ago isn't visible at the connection's default 'confirmed' commitment.
       const curveAcc = await withRpcRetry(() => this.connection.getAccountInfo(curveAddr, 'processed'));
+      if (!isAmm) cachedCurveAccount = curveAcc;
       if (curveAcc && curveAcc.data.length >= 64) {
         effectiveCreator = new PublicKey(curveAcc.data.subarray(32, 64));
       }
@@ -258,7 +264,10 @@ export class RugAnalyzer {
       // random -25/-45 score penalties to AMM tokens with zero relationship to real risk.
       let curveRealTokenReserves: bigint | null = null;
       if (!isAmm) {
-        const curveAccount = await withRpcRetry(() => this.connection.getAccountInfo(bondingCurveOrPool));
+        // Reuse the account already fetched during creator resolution above — it's the same
+        // address. Only fall back to a fresh fetch if that one failed.
+        const curveAccount = cachedCurveAccount
+          ?? await withRpcRetry(() => this.connection.getAccountInfo(bondingCurveOrPool));
         if (curveAccount) {
           const view = new DataView(curveAccount.data.buffer);
 
