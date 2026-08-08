@@ -42,8 +42,6 @@ export class GrpcWatcher {
   private seenTokens: Set<string> = new Set();
   private createDiagnosticCount: number = 0;
   private pumpIxDiagnosticCount: number = 0;
-  private dispatchDiagnosticCount: number = 0;
-  private streamDiagnosticCount: number = 0;
   private readonly SEEN_TOKENS_MAX = 10_000;
   private readonly SEEN_TOKENS_EVICT = 1_000;
   private lastSlot: number = 0;
@@ -261,20 +259,6 @@ export class GrpcWatcher {
 
   private handleData(data: any): void {
     try {
-      // TEMP DIAGNOSTIC — gRPC now connects successfully but no transaction ever reaches
-      // processTransaction's diagnostic. Log the raw shape of the first N stream messages to
-      // see what the subscription is actually delivering (slots only? blockmeta only? a
-      // differently-shaped transaction envelope?). Remove once the stream is confirmed good.
-      if (this.streamDiagnosticCount < 25) {
-        this.streamDiagnosticCount++;
-        logger.warn({
-          keys: Object.keys(data || {}),
-          hasTransaction: !!data?.transaction,
-          txKeys: data?.transaction ? Object.keys(data.transaction) : null,
-          innerTxKeys: data?.transaction?.transaction ? Object.keys(data.transaction.transaction) : null,
-        }, '🔬 DIAGNOSTIC: raw gRPC stream message');
-      }
-
       if (data.slot) {
         this.lastSlot = data.slot.slot;
         return;
@@ -317,67 +301,66 @@ export class GrpcWatcher {
   }
 
   private processTransaction(txData: any): void {
-    const tx = txData.transaction;
-    const slot = txData.slot;
+    // Yellowstone envelope nesting (confirmed against the live stream):
+    //   SubscribeUpdateTransaction { transaction: TransactionInfo, slot }
+    //   TransactionInfo           { signature, isVote, transaction: Transaction, meta, index }
+    //   Transaction               { signatures, message }
+    // The previous code read txData.transaction.message — but that level is TransactionInfo,
+    // which has no .message field, so the guard below rejected EVERY transaction and no token
+    // was ever detected. The message lives one level deeper; meta stays on TransactionInfo.
+    const txInfo = txData?.transaction;
+    const slot = txData?.slot;
+    const message = txInfo?.transaction?.message;
+    const meta = txInfo?.meta;
 
-    // Logged before the !tx.message guard below — a differently-shaped envelope would
-    // otherwise return early and silently hide the fact that data IS arriving.
-    if (this.dispatchDiagnosticCount < 15) {
-      logger.warn({
-        txDataKeys: Object.keys(txData || {}),
-        hasTx: !!tx,
-        txKeys: tx ? Object.keys(tx) : null,
-        hasMessage: !!tx?.message,
-        slot,
-      }, '🔬 DIAGNOSTIC: processTransaction entry');
-    }
+    if (!message) return;
 
-    if (!tx || !tx.message) return;
-
-    const instructions: any[] = tx.message.instructions || [];
+    const instructions: any[] = message.instructions || [];
     const innerInstructions: any[] = [];
 
-    if (tx.meta?.innerInstructions) {
-      for (const inner of tx.meta.innerInstructions) {
+    if (meta?.innerInstructions) {
+      for (const inner of meta.innerInstructions) {
         if (inner.instructions) innerInstructions.push(...inner.instructions);
       }
     }
 
     const allInstructions = [...instructions, ...innerInstructions];
 
-    // TEMP DIAGNOSTIC — processPumpInstruction's own entry-point diagnostic never fired at all,
-    // meaning it's never even being called — the bug is in dispatch, not inside that function.
-    // Log every resolved programId for the first several transactions to see what's actually
-    // coming through and whether resolveProgramId is finding PUMP_PROGRAM_ID at all.
-    if (this.dispatchDiagnosticCount < 15) {
-      this.dispatchDiagnosticCount++;
-      const resolved = allInstructions.map(ix => this.resolveProgramId(ix, tx.message));
-      logger.warn({
-        totalInstructions: allInstructions.length,
-        topLevel: instructions.length,
-        inner: innerInstructions.length,
-        resolvedProgramIds: resolved,
-        pumpProgramExpected: CONFIG.PUMP_PROGRAM_ID.toBase58(),
-      }, '🔬 DIAGNOSTIC: transaction instruction dispatch');
-    }
-
     for (const ix of allInstructions) {
-      const programId = this.resolveProgramId(ix, tx.message);
+      const programId = this.resolveProgramId(ix, message);
       if (!programId) continue;
 
       if (programId === CONFIG.PUMP_PROGRAM_ID.toBase58()) {
-        this.processPumpInstruction(ix, tx.message, slot);
+        this.processPumpInstruction(ix, message, slot);
       } else if (programId === 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA') {
-        if (this.onAmmPool) this.onAmmPool({ ix, message: tx.message, slot });
+        if (this.onAmmPool) this.onAmmPool({ ix, message, slot });
       }
     }
   }
 
+  /**
+   * Account keys arrive over gRPC as raw 32-byte protobuf `bytes`, not base58 strings — the
+   * old `key.pubkey` fallback was undefined for every one of them, so program IDs never
+   * resolved and no instruction was ever dispatched. Handle all three shapes defensively:
+   * already-a-string (JSON-RPC style), {pubkey} wrapper, or raw bytes needing encoding.
+   */
+  private toBase58(key: any): string | null {
+    if (!key) return null;
+    if (typeof key === 'string') return key;
+    if (key.pubkey) {
+      return typeof key.pubkey === 'string' ? key.pubkey : bs58.encode(Buffer.from(key.pubkey));
+    }
+    try {
+      return bs58.encode(Buffer.from(key));
+    } catch {
+      return null;
+    }
+  }
+
   private resolveProgramId(ix: any, message: any): string | null {
-    if (ix.programId) return ix.programId;
-    if (ix.programIdIndex !== undefined && message.accountKeys) {
-      const key = message.accountKeys[ix.programIdIndex];
-      return typeof key === 'string' ? key : key?.pubkey || null;
+    if (ix.programId) return this.toBase58(ix.programId);
+    if (ix.programIdIndex !== undefined && message?.accountKeys) {
+      return this.toBase58(message.accountKeys[ix.programIdIndex]);
     }
     return null;
   }
@@ -465,21 +448,21 @@ export class GrpcWatcher {
 
   private resolveAccounts(ix: any, message: any): string[] {
     const accountKeys: string[] = [];
-    if (message.accountKeys) {
+    if (message?.accountKeys) {
       for (const key of message.accountKeys) {
-        accountKeys.push(typeof key === 'string' ? key : key.pubkey);
+        accountKeys.push(this.toBase58(key) || 'unknown');
       }
     }
 
     const accounts: string[] = [];
+    // ix.accounts is protobuf `bytes` — iterating a Uint8Array yields the account indices
+    // as numbers, which the first branch handles.
     if (ix.accounts) {
       for (const acc of ix.accounts) {
         if (typeof acc === 'number' || typeof acc === 'bigint') {
           accounts.push(accountKeys[Number(acc)] || 'unknown');
-        } else if (typeof acc === 'string') {
-          accounts.push(acc);
-        } else if (acc.pubkey) {
-          accounts.push(acc.pubkey);
+        } else {
+          accounts.push(this.toBase58(acc) || 'unknown');
         }
       }
     }
