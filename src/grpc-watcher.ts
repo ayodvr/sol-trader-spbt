@@ -236,13 +236,12 @@ export class GrpcWatcher {
           vote: false,
           failed: false,
         },
-        pump_amm: {
-          accountInclude: ['pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA'],
-          accountExclude: [],
-          accountRequired: [],
-          vote: false,
-          failed: false,
-        },
+        // The PumpSwap AMM transaction filter was removed deliberately. Both call sites invoke
+        // start() without an onAmmPool callback, so every AMM transaction was decoded and then
+        // dropped on the floor — while still being billed as streamed bandwidth. The AMM track
+        // gets its pool events from its own WebSocket subscription in pumpswap.ts
+        // (watchAmmPoolCreations), which is entirely independent of this stream. Re-add this
+        // filter ONLY if an onAmmPool callback is actually wired up.
       },
       transactionsStatus: {},
       blocks: {},
@@ -509,6 +508,15 @@ export class GrpcWatcher {
 
       this.reconnectAttempts++;
       const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 60_000);
+      // Escalate after repeated failures. A dead gRPC stream does NOT stop the bot — the AMM
+      // track runs on a separate WebSocket and keeps trading, so the dashboard still looks
+      // healthy while bonding-curve sniping is silently switched off. That exact failure mode
+      // went unnoticed for the entire life of this bot; make it loud instead.
+      if (this.reconnectAttempts >= 3) {
+        logger.error({
+          attempt: this.reconnectAttempts,
+        }, '🚨 gRPC stream down — BONDING CURVE SNIPING IS OFF (AMM track still running, so the bot will look alive). Check the Alchemy quota/credits.');
+      }
       logger.info({ attempt: this.reconnectAttempts, delay: `${(delay / 1000).toFixed(0)}s` }, 'Scheduling gRPC reconnection');
 
       await new Promise(resolve => setTimeout(resolve, delay));
