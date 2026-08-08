@@ -457,6 +457,7 @@ export class ExitManager {
           reason: actualReason,
           timestamp: Date.now(),
           creator: pos.creator,
+          source: pos.source,
         });
       }
 
@@ -508,6 +509,7 @@ export class ExitManager {
               reason,
               timestamp: Date.now(),
               creator: pos.creator,
+              source: pos.source,
             });
           }
           await this.sweepProfits();

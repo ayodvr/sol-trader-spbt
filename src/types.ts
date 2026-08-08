@@ -59,4 +59,8 @@ export interface TradeHistoryEntry {
   reason: 'take_profit' | 'stop_loss' | 'trailing_stop' | 'rug_detected' | 'manual';
   timestamp: number;
   creator?: string;
+  // Which track opened this position. Without it, bonding-curve and AMM trades are
+  // indistinguishable in the history file — and if the gRPC stream dies the AMM track keeps
+  // trading, silently contaminating any sample being collected for the sniping strategy.
+  source?: 'bonding_curve' | 'amm';
 }
