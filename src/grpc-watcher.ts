@@ -43,6 +43,7 @@ export class GrpcWatcher {
   private createDiagnosticCount: number = 0;
   private pumpIxDiagnosticCount: number = 0;
   private dispatchDiagnosticCount: number = 0;
+  private streamDiagnosticCount: number = 0;
   private readonly SEEN_TOKENS_MAX = 10_000;
   private readonly SEEN_TOKENS_EVICT = 1_000;
   private lastSlot: number = 0;
@@ -260,6 +261,20 @@ export class GrpcWatcher {
 
   private handleData(data: any): void {
     try {
+      // TEMP DIAGNOSTIC — gRPC now connects successfully but no transaction ever reaches
+      // processTransaction's diagnostic. Log the raw shape of the first N stream messages to
+      // see what the subscription is actually delivering (slots only? blockmeta only? a
+      // differently-shaped transaction envelope?). Remove once the stream is confirmed good.
+      if (this.streamDiagnosticCount < 25) {
+        this.streamDiagnosticCount++;
+        logger.warn({
+          keys: Object.keys(data || {}),
+          hasTransaction: !!data?.transaction,
+          txKeys: data?.transaction ? Object.keys(data.transaction) : null,
+          innerTxKeys: data?.transaction?.transaction ? Object.keys(data.transaction.transaction) : null,
+        }, '🔬 DIAGNOSTIC: raw gRPC stream message');
+      }
+
       if (data.slot) {
         this.lastSlot = data.slot.slot;
         return;
@@ -304,6 +319,18 @@ export class GrpcWatcher {
   private processTransaction(txData: any): void {
     const tx = txData.transaction;
     const slot = txData.slot;
+
+    // Logged before the !tx.message guard below — a differently-shaped envelope would
+    // otherwise return early and silently hide the fact that data IS arriving.
+    if (this.dispatchDiagnosticCount < 15) {
+      logger.warn({
+        txDataKeys: Object.keys(txData || {}),
+        hasTx: !!tx,
+        txKeys: tx ? Object.keys(tx) : null,
+        hasMessage: !!tx?.message,
+        slot,
+      }, '🔬 DIAGNOSTIC: processTransaction entry');
+    }
 
     if (!tx || !tx.message) return;
 
