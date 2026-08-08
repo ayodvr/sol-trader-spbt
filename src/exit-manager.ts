@@ -2,6 +2,7 @@ import {
   Connection, PublicKey, Keypair, SystemProgram, Transaction, LAMPORTS_PER_SOL
 } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from '@solana/spl-token';
+import fs from 'fs';
 import { CONFIG } from '../config.js';
 import { sell } from './sell.js';
 import { ammSell, fetchAmmPool } from './pumpswap.js';
@@ -28,6 +29,7 @@ export class ExitManager {
     this.wallet = wallet;
     this.telegram = telegram;
     this.onExitSuccess = onExitSuccess;
+    try { fs.mkdirSync('./data', { recursive: true }); } catch { /* already exists */ }
   }
 
   /**
@@ -236,6 +238,7 @@ export class ExitManager {
     }
 
     const priceChangePercent = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
+    this.logPriceTick(pos, currentPrice, priceChangePercent);
 
     // Sanity guard: a legitimate pump.fun/PumpSwap pool cannot move 20x+ in a single poll tick.
     // An instantaneous jump that large is a stale/corrupted reserve read (e.g. a WS/gRPC push
@@ -532,6 +535,32 @@ export class ExitManager {
           }
         }
       }, 2000);
+    }
+  }
+
+  // trade-history.json only ever recorded entry/exit snapshots, which made every past
+  // "should we change TP/SL/trailing-stop?" discussion pure guesswork — there was no way to
+  // know what the price actually did between entry and exit. Append-only JSONL so concurrent
+  // positions can write ticks without racing each other on a read-modify-write cycle. Once
+  // enough of these accumulate, a real backtest (replay logged paths against different exit
+  // parameters) becomes possible instead of a fabricated one.
+  private readonly PRICE_TICK_FILE = './data/price-ticks.jsonl';
+
+  private logPriceTick(pos: Position, currentPrice: number, priceChangePercent: number): void {
+    try {
+      const line = JSON.stringify({
+        mint: pos.mint,
+        entryTimestamp: pos.entryTimestamp,
+        ts: Date.now(),
+        elapsedMs: Date.now() - pos.entryTimestamp,
+        source: pos.source,
+        price: currentPrice,
+        changePercent: Number(priceChangePercent.toFixed(4)),
+        highWaterMark: pos.highWaterMark,
+      }) + '\n';
+      fs.appendFileSync(this.PRICE_TICK_FILE, line);
+    } catch (err: any) {
+      logger.debug({ err: err.message }, 'Failed to log price tick');
     }
   }
 
