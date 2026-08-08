@@ -370,9 +370,12 @@ async function main() {
     if (stats.totalLatencyMs.length > 100) stats.totalLatencyMs.shift();
     const avgLatency = stats.totalLatencyMs.reduce((a, b) => a + b, 0) / stats.totalLatencyMs.length;
 
+    // event.creator is a placeholder (set to the mint) — the create instruction's account list
+    // can't be indexed reliably because those are versioned transactions using Address Lookup
+    // Tables. The analyzer resolves the real creator from the bonding curve account, so it's
+    // deliberately not logged here rather than logged as something misleading.
     logger.info({
       mint: event.mint.toBase58(),
-      creator: event.creator.toBase58().slice(0, 8) + '...',
       latency: `${latency}ms`,
       avgLatency: `${avgLatency.toFixed(0)}ms`,
       source: USE_GRPC ? 'gRPC' : 'WebSocket',

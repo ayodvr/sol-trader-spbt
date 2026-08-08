@@ -103,7 +103,9 @@ export class RugAnalyzer {
     let effectiveCreator = creator;
     try {
       const curveAddr = isAmm ? deriveBondingCurve(mint) : bondingCurveOrPool;
-      const curveAcc = await withRpcRetry(() => this.connection.getAccountInfo(curveAddr));
+      // 'processed' for the same reason as the mint fetch below — a curve account created
+      // milliseconds ago isn't visible at the connection's default 'confirmed' commitment.
+      const curveAcc = await withRpcRetry(() => this.connection.getAccountInfo(curveAddr, 'processed'));
       if (curveAcc && curveAcc.data.length >= 64) {
         effectiveCreator = new PublicKey(curveAcc.data.subarray(32, 64));
       }
@@ -150,26 +152,36 @@ export class RugAnalyzer {
       // Try standard SPL Token first, then Token-2022 (pump.fun now uses Token-2022)
       let mintInfo;
       let tokenProgram = TOKEN_PROGRAM_ID;
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      let triedToken2022 = false;
+      const MAX_MINT_ATTEMPTS = 4;
+      for (let attempt = 1; attempt <= MAX_MINT_ATTEMPTS; attempt++) {
         try {
-          mintInfo = await withRpcRetry(() => getMint(this.connection, mint, 'confirmed', tokenProgram));
+          // Query at 'processed', matching the commitment the gRPC watcher detects at. At
+          // 'confirmed' a just-created mint frequently isn't visible yet, so every brand-new
+          // token — the entire population we're trying to snipe — failed analysis outright.
+          mintInfo = await withRpcRetry(() => getMint(this.connection, mint, 'processed', tokenProgram));
           break;
         } catch (mintErr: any) {
           const isOwnerError = mintErr?.name === 'TokenInvalidAccountOwnerError' ||
             mintErr?.constructor?.name === 'TokenInvalidAccountOwnerError';
-          if (isOwnerError && tokenProgram === TOKEN_PROGRAM_ID) {
-            // Retry with Token-2022 program — pump.fun migrated to Token-2022
+          if (isOwnerError && !triedToken2022) {
+            // pump.fun uses Token-2022. Switching programs must NOT burn a retry attempt:
+            // previously this `continue` could land on the final iteration and exit the loop
+            // with mintInfo still undefined ("getMint returned undefined after retries"),
+            // even though the account existed and was readable under the other program.
             tokenProgram = TOKEN_2022_PROGRAM_ID;
+            triedToken2022 = true;
             logger.debug({ mint: mintStr }, 'Retrying as Token-2022 mint');
-            continue; // retry immediately with Token-2022
+            attempt--;
+            continue;
           }
           if (isOwnerError) {
             // Not a recognised token program — skip
             logger.debug({ mint: mintStr }, 'Unknown token program — skipping');
             return { safe: false, score: 0, flags: ['UNKNOWN_TOKEN_PROGRAM'], mintAuthorityRevoked: false, freezeAuthorityRevoked: false, buyTax: 0, sellTax: 0, top10HolderPercent: 0, liquidityLocked: false };
           }
-          if (attempt < 3) {
-            await new Promise(r => setTimeout(r, 400 * attempt));
+          if (attempt < MAX_MINT_ATTEMPTS) {
+            await new Promise(r => setTimeout(r, 300 * attempt));
           } else {
             throw mintErr;
           }
