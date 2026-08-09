@@ -95,7 +95,11 @@ export class ExitManager {
   // Fallback polling interval. WS event-driven checks fire instantly on pool changes.
   // This poll is the safety net in case WS misses an event or disconnects.
   // AMM positions: 2s fallback (WS handles real-time). Dry-run: 10s.
-  private readonly POLL_INTERVAL_MS = CONFIG.DRY_RUN ? 10_000 : 2_000;
+  // Must match live cadence. A 10s dry-run poll made every simulated exit fire long after its
+  // trigger: stop losses configured at -25% realized an average price change near -64%, and
+  // take-profits set at +35% exited around +91%. Both directions were badly distorted, which
+  // made dry-run samples useless for judging the strategy — the whole point of the exercise.
+  private readonly POLL_INTERVAL_MS = 2_000;
   // How many consecutive "pool not found" ticks before force-closing a stuck position
   private poolMissCount: Map<string, number> = new Map();
   // How many failed sell retries before giving up on a position and alerting for manual action
@@ -421,10 +425,14 @@ export class ExitManager {
         if (netSolDiff > 0) {
           realSolReturned = netSolDiff;
         } else if (priceChange !== undefined) {
-          // Balance diff still unreliable (Jito tip in same wallet) — use price-based estimate
-          // but apply 80% haircut to account for slippage, fees, and tip
+          // Balance diff unreliable (tip lands in the same wallet) — estimate from price.
+          // The old 20% blanket haircut was far too punitive and dominated every dry-run
+          // number: it turned a clean +35% take-profit into +8% and made a -25% stop look
+          // like -40%, on top of the polling distortion. Real cost on a ~0.05 SOL exit is
+          // roughly 1% pump.fun fee + ~0.4% Sender tip + a little price impact, so ~5%
+          // covers it. This is an estimate either way; it should not be the dominant term.
           const expectedSol = entrySol * (1 + priceChange / 100);
-          realSolReturned = Math.min(entrySol * 2, Math.max(0, expectedSol * 0.80));
+          realSolReturned = Math.min(entrySol * 2, Math.max(0, expectedSol * 0.95));
         } else {
           realSolReturned = entrySol * 0.90; // Fallback: assume 10% fees/slippage
         }
