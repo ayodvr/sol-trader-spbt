@@ -132,6 +132,11 @@ export function startApi(state: BotState, controls: BotControls) {
       tradeHistory: state.tradeHistory.slice(0, 20),
       walletStats: state.walletStats(),
       recentLogs: state.recentLogs,
+      // Was missing here (and in /status) while broadcastUpdate did send it. The dashboard
+      // falls back to summing tradeHistory when this is absent — and tradeHistory is truncated
+      // to 20 entries — so the "Total PnL" card showed the last 20 trades' sum labelled as a
+      // lifetime total, which is why it never reconciled with anything.
+      totalPnl: state.stats.totalPnl,
     }, jsonReplacer);
     res.write(`data: ${initialPayload}\n\n`);
 
@@ -175,6 +180,7 @@ export function startApi(state: BotState, controls: BotControls) {
       tradeHistory: state.tradeHistory,
       walletStats: state.walletStats(),
       recentLogs: state.recentLogs,
+      totalPnl: state.stats.totalPnl,
     });
   });
 
