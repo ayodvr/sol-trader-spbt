@@ -286,6 +286,7 @@ async function main() {
       if (activeWatcher) {
         activeWatcher.start(watcherCallback);
       }
+      startAmmWatcher();
     },
     stop: () => {
       botState.isRunning = false;
@@ -294,6 +295,12 @@ async function main() {
       if (activeWatcher) {
         activeWatcher.stop();
       }
+      // Pausing previously left this WebSocket subscribed. Its callback returned early on
+      // !isRunning, but onProgramAccountChange fires on EVERY PumpSwap account mutation —
+      // every buy and sell on every graduated token — and those notifications are delivered
+      // and billed whether we act on them or not. That is why a "paused" bot kept draining
+      // credits with no visible activity. Actually unsubscribe.
+      stopAmmWatcher();
     },
     forceExit: async (mint: string) => {
       for (const em of exitManagers) {
@@ -511,7 +518,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────
   //  TRACK 2: PumpSwap AMM (graduated tokens)
   // ─────────────────────────────────────────────────────────────
-  watchAmmPoolCreations(connection, (poolInfo: AmmPoolInfo) => {
+  const ammPoolHandler = (poolInfo: AmmPoolInfo) => {
     if (!botState.isRunning) return;
 
     // Fix 6: deduplicate AMM pool events
@@ -661,7 +668,28 @@ async function main() {
         logger.warn({ mint: poolInfo.baseMint.toBase58(), error: result.error || 'Unknown' }, '❌ AMM Snipe execution failed');
       }
     }); // end runAnalysis
-  });
+  };
+
+  // Subscription lifecycle so pausing genuinely stops the billed notification stream.
+  let ammSubId: number | null = null;
+  async function startAmmWatcher(): Promise<void> {
+    if (ammSubId !== null) return;
+    ammSubId = await watchAmmPoolCreations(connection, ammPoolHandler);
+  }
+  function stopAmmWatcher(): void {
+    if (ammSubId === null) return;
+    const id = ammSubId;
+    ammSubId = null;
+    connection.removeProgramAccountChangeListener(id)
+      .then(() => logger.info('🛑 AMM pool subscription closed (paused — no longer billing notifications)'))
+      .catch((err: any) => logger.warn({ err: err.message }, 'Failed to close AMM pool subscription'));
+  }
+
+  if (botState.isRunning) {
+    await startAmmWatcher();
+  } else {
+    logger.info('⏸️ Bot is paused — AMM pool subscription not started');
+  }
 
   // ─── Periodic wallet maintenance (every 5 minutes) ───
   setInterval(async () => {

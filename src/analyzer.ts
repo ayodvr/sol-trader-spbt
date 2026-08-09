@@ -347,7 +347,13 @@ export class RugAnalyzer {
       // sides: a brand-new bonding-curve token has no sellers yet by construction, and a
       // freshly-graduated AMM pool sees a real simultaneous buy rush — neither should trip
       // "coordinated pump" just for being all-buys with nothing to compare against yet.
-      {
+      // Skipped entirely on the bonding-curve track: those tokens are seconds old, so the
+      // Helius query returns almost no transactions and checkVolumeSpike bails on its own
+      // `transactions.length < 5` guard — after paying for the call. It cannot fire there by
+      // construction (it needs sellCount >= 3 on a token nobody has had time to sell), so it
+      // was pure spend for zero information. This is the single largest Helius consumer at
+      // ~70 detections/minute, and Helius credits are the binding constraint.
+      if (isAmm) {
         const volumeCheck = await this.checkVolumeSpike(mintStr);
         if (volumeCheck.isCoordinated) {
           // Coordinated pump = wash trading by dev and insiders = INSTANT FAIL
