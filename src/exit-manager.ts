@@ -431,8 +431,16 @@ export class ExitManager {
           // like -40%, on top of the polling distortion. Real cost on a ~0.05 SOL exit is
           // roughly 1% pump.fun fee + ~0.4% Sender tip + a little price impact, so ~5%
           // covers it. This is an estimate either way; it should not be the dominant term.
+          // The old ceiling here was entrySol * 2, which clipped EVERY winning exit to exactly
+          // +100% while losing exits ran freely to -100%. In a 50-trade sample all nine
+          // take-profits returned an identical +0.0500 — the cap, not the market. That makes
+          // the strategy look far worse than it is, because meme-coin upside is the whole
+          // thesis. 21x matches IMPLAUSIBLE_GAIN_PERCENT (2000%) in checkExitConditions, which
+          // already rejects garbage reserve reads, so this only guards against absurd values
+          // that guard somehow lets through.
+          const MAX_RETURN_MULTIPLE = 21;
           const expectedSol = entrySol * (1 + priceChange / 100);
-          realSolReturned = Math.min(entrySol * 2, Math.max(0, expectedSol * 0.95));
+          realSolReturned = Math.min(entrySol * MAX_RETURN_MULTIPLE, Math.max(0, expectedSol * 0.95));
         } else {
           realSolReturned = entrySol * 0.90; // Fallback: assume 10% fees/slippage
         }
