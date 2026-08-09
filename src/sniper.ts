@@ -117,7 +117,7 @@ export class PumpSniper {
           throw new Error('Bonding curve not found — pool may not exist yet');
         }
 
-        const view = new DataView(curveAccount.data.buffer);
+        const view = new DataView(curveAccount.data.buffer, curveAccount.data.byteOffset, curveAccount.data.byteLength);
         const virtualTokenReserves = view.getBigUint64(64, true);
         const virtualSolReserves = view.getBigUint64(72, true);
 

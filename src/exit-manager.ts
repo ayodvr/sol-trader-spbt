@@ -142,7 +142,7 @@ export class ExitManager {
             return;
           }
           this.poolMissCount.delete(pos.mint);
-          const view = new DataView(poolAcc.data.buffer);
+          const view = new DataView(poolAcc.data.buffer, poolAcc.data.byteOffset, poolAcc.data.byteLength);
           const baseReserves = view.getBigUint64(107, true);
           const quoteReserves = view.getBigUint64(115, true);
           pos.poolInfo = { ...pos.poolInfo, baseReserves, quoteReserves };
@@ -184,7 +184,7 @@ export class ExitManager {
         return;
       }
 
-      const view = new DataView(curveAccount.data.buffer);
+      const view = new DataView(curveAccount.data.buffer, curveAccount.data.byteOffset, curveAccount.data.byteLength);
       const virtualTokenReserves = view.getBigUint64(64, true);
       const virtualSolReserves = view.getBigUint64(72, true);
 

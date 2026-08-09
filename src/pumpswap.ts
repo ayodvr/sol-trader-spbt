@@ -127,7 +127,7 @@ export async function fetchAmmPool(
       const poolAcc = await connection.getAccountInfo(poolAddress);
 
       if (poolAcc && poolAcc.data.length > 100) {
-        const view = new DataView(poolAcc.data.buffer);
+        const view = new DataView(poolAcc.data.buffer, poolAcc.data.byteOffset, poolAcc.data.byteLength);
         const poolIndex = view.getUint16(9, true);
         const creatorRead = new PublicKey(poolAcc.data.subarray(11, 43));
         const baseMintRead = new PublicKey(poolAcc.data.subarray(43, 75));
@@ -349,7 +349,7 @@ export async function watchAmmPoolCreations(
         if (seenPools.has(poolKey)) return;
         seenPools.add(poolKey);
 
-        const view = new DataView(data.buffer);
+        const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
         const poolIndex = view.getUint16(9, true);
         const creator = new PublicKey(data.subarray(11, 43));
         const baseMint = new PublicKey(data.subarray(43, 75));

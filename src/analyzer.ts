@@ -269,7 +269,7 @@ export class RugAnalyzer {
         const curveAccount = cachedCurveAccount
           ?? await withRpcRetry(() => this.connection.getAccountInfo(bondingCurveOrPool));
         if (curveAccount) {
-          const view = new DataView(curveAccount.data.buffer);
+          const view = new DataView(curveAccount.data.buffer, curveAccount.data.byteOffset, curveAccount.data.byteLength);
 
           const virtualTokenReserves = view.getBigUint64(64, true);
           const realTokenReserves = view.getBigUint64(80, true);

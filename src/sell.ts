@@ -103,7 +103,7 @@ export async function sell(
     const curveData = curveAccount.data;
     const cashback = isCashbackEnabled(curveData);
 
-    const view = new DataView(curveData.buffer);
+    const view = new DataView(curveData.buffer, curveData.byteOffset, curveData.byteLength);
     const virtualTokenReserves = view.getBigUint64(64, true);
     const virtualSolReserves = view.getBigUint64(72, true);
 

@@ -69,7 +69,7 @@ async function buildBuyInstruction(
 
   if (curveAccount) {
     bondingCurveData = curveAccount.data;
-    const view = new DataView(curveAccount.data.buffer);
+    const view = new DataView(curveAccount.data.buffer, curveAccount.data.byteOffset, curveAccount.data.byteLength);
     const virtualTokenReserves = view.getBigUint64(64, true);
     const virtualSolReserves = view.getBigUint64(72, true);
 
@@ -177,7 +177,7 @@ export async function nativeSnipe(
       const curveAccount = await connection.getAccountInfo(bondingCurve);
       let estimatedTokens = BigInt(Math.floor(solAmountLamports * 1_000_000)); // fallback estimate
       if (curveAccount) {
-        const view = new DataView(curveAccount.data.buffer);
+        const view = new DataView(curveAccount.data.buffer, curveAccount.data.byteOffset, curveAccount.data.byteLength);
         const virtualTokenReserves = view.getBigUint64(64, true);
         const virtualSolReserves = view.getBigUint64(72, true);
         const solAfterFee = BigInt(Math.floor(solAmountLamports * 0.99));
