@@ -45,7 +45,14 @@ const SAMPLE_EVERY_MS = 30_000;
 const TOTAL_WINDOW_MS = 600_000;   // 10 minutes
 const SPLIT_MS = 300_000;          // survivor classification happens here
 
+// One line per SAMPLE, not per token. The first version of this script buffered a token's whole
+// 10-minute path in memory and wrote it only on completion — so when the process was killed at
+// 6.5 minutes, before any token had finished, it had written nothing at all despite having
+// collected thousands of samples. price-ticks.jsonl survived every crash in this project for
+// exactly the opposite reason: it appends immediately. Do the same here and group at analysis time.
 interface Sample {
+  mint: string;
+  detectedAt: number;
   offsetMs: number;
   price: number;
   vSol: string;      // stringified bigint — reserve identity is how "still trading" is detected
@@ -68,7 +75,7 @@ async function collect(hours: number) {
   let observing = 0, completed = 0;
   const deadline = Date.now() + hours * 3_600_000;
 
-  async function readCurve(mint: string): Promise<Sample | null> {
+  async function readCurve(mint: string, detectedAt: number, offsetMs: number): Promise<Sample | null> {
     try {
       const acc = await connection.getAccountInfo(deriveBondingCurve(new PublicKey(mint)), 'processed');
       if (!acc || acc.data.length < 49) return null;
@@ -80,7 +87,7 @@ async function collect(hours: number) {
       const vSol = view.getBigUint64(16, true);
       if (vToken === 0n) return null;
       return {
-        offsetMs: 0,
+        mint, detectedAt, offsetMs,
         price: Number(vSol * 1_000_000_000n / vToken),
         vSol: vSol.toString(),
         vToken: vToken.toString(),
@@ -91,21 +98,17 @@ async function collect(hours: number) {
 
   async function observe(mint: string, detectedAt: number) {
     observing++;
-    const samples: Sample[] = [];
     for (let offset = 0; offset <= TOTAL_WINDOW_MS; offset += SAMPLE_EVERY_MS) {
       const wait = detectedAt + offset - Date.now();
       if (wait > 0) await new Promise(r => setTimeout(r, wait));
-      const s = await readCurve(mint);
-      if (s) samples.push({ ...s, offsetMs: offset });
+      const s = await readCurve(mint, detectedAt, offset);
+      if (s) fs.appendFileSync(OUT_FILE, JSON.stringify(s) + '\n');
       // A graduated token has left the curve — its price can no longer be read there, and it is a
       // *good* outcome, not a dead one. Stop sampling but keep what was collected.
       if (s?.complete) break;
     }
     observing--;
-    if (samples.length >= 2) {
-      fs.appendFileSync(OUT_FILE, JSON.stringify({ mint, detectedAt, samples } as Record) + '\n');
-      if (++completed % 20 === 0) console.log(`  ${completed} tokens recorded (${observing} in flight)...`);
-    }
+    if (++completed % 20 === 0) console.log(`  ${completed} tokens followed to completion (${observing} in flight)...`);
   }
 
   const watcher = new GrpcWatcher();
@@ -126,10 +129,21 @@ async function collect(hours: number) {
 function analyze() {
   if (!fs.existsSync(OUT_FILE)) { console.error(`No ${OUT_FILE} — run collection first.`); process.exit(1); }
 
-  const records: Record[] = fs.readFileSync(OUT_FILE, 'utf8')
-    .split('\n').filter(Boolean)
-    .map(l => { try { return JSON.parse(l); } catch { return null; } })
-    .filter((r): r is Record => !!r && Array.isArray(r.samples) && r.samples.length >= 2);
+  // The file is one line per sample. Group them back into per-token paths. A trailing partial line
+  // from a killed process is simply dropped by the JSON.parse guard.
+  const grouped = new Map<string, Record>();
+  for (const line of fs.readFileSync(OUT_FILE, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    let s: Sample;
+    try { s = JSON.parse(line); } catch { continue; }
+    if (!s?.mint || typeof s.offsetMs !== 'number' || !isFinite(s.price)) continue;
+    const key = `${s.mint}:${s.detectedAt}`;
+    let rec = grouped.get(key);
+    if (!rec) { rec = { mint: s.mint, detectedAt: s.detectedAt, samples: [] }; grouped.set(key, rec); }
+    rec.samples.push(s);
+  }
+  const records: Record[] = [...grouped.values()].filter(r => r.samples.length >= 2);
+  for (const r of records) r.samples.sort((a, b) => a.offsetMs - b.offsetMs);
 
   const at = (r: Record, ms: number) => r.samples.find(s => s.offsetMs >= ms) || null;
   const median = (xs: number[]) => {
