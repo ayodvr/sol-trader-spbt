@@ -139,6 +139,17 @@ async function main() {
   const MAX_QUEUE_DEPTH = CONFIG.DRY_RUN ? 20 : 100;
   // ─── Max open positions cap (DRY_RUN=10, live=unlimited) ───
   const MAX_OPEN_POSITIONS = CONFIG.DRY_RUN ? 10 : 9999;
+  // Hitting the cap used to be logged at debug level, i.e. invisible at the default log level.
+  // The bot would pass token after token through the anti-rug filter and then enter none of them,
+  // with nothing in the log to say why. Report it at warn instead, throttled so a saturated cap
+  // doesn't drown the log at ~50 new tokens per 30s.
+  let lastCapWarnAt = 0;
+  function warnPositionCapReached(openCount: number, track: string) {
+    const now = Date.now();
+    if (now - lastCapWarnAt < 30_000) return;
+    lastCapWarnAt = now;
+    logger.warn({ openCount, max: MAX_OPEN_POSITIONS, track }, '🚫 Max open positions reached — skipping new snipes until a position closes');
+  }
   const analysisQueue: Array<() => void> = [];
   function runAnalysis(fn: () => Promise<void>) {
     const task = async () => {
@@ -418,7 +429,7 @@ async function main() {
       // Guard: max open positions cap
       const openCount = exitManagers.flatMap(em => em.getPositions()).length;
       if (openCount >= MAX_OPEN_POSITIONS) {
-        logger.debug({ openCount, max: MAX_OPEN_POSITIONS }, 'Max open positions reached — skipping bonding curve snipe');
+        warnPositionCapReached(openCount, 'bonding_curve');
         return;
       }
 
@@ -591,7 +602,7 @@ async function main() {
       // Guard: max open positions cap
       const openCount = exitManagers.flatMap(em => em.getPositions()).length;
       if (openCount >= MAX_OPEN_POSITIONS) {
-        logger.debug({ openCount, max: MAX_OPEN_POSITIONS }, 'Max open positions reached — skipping AMM snipe');
+        warnPositionCapReached(openCount, 'amm');
         return;
       }
 

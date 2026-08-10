@@ -56,7 +56,7 @@ export interface TradeHistoryEntry {
   soldAt: number;
   pnlSol: number;
   pnlPercent: string;
-  reason: 'take_profit' | 'stop_loss' | 'trailing_stop' | 'rug_detected' | 'manual';
+  reason: 'take_profit' | 'stop_loss' | 'trailing_stop' | 'rug_detected' | 'timeout' | 'manual';
   timestamp: number;
   creator?: string;
   // Which track opened this position. Without it, bonding-curve and AMM trades are

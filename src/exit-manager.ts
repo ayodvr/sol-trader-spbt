@@ -351,6 +351,23 @@ export class ExitManager {
       }
     }
 
+    // Exit Signal 4: Max hold time.
+    // Checked last so a genuine take-profit/stop-loss/trailing trigger always wins on the same
+    // tick. This is what releases positions in a token that simply never trades again: its
+    // reserves are literally constant, so priceChangePercent stays pinned at 0 and none of the
+    // three signals above can ever fire. See CONFIG.MAX_HOLD_MINUTES.
+    const heldMs = Date.now() - pos.entryTimestamp;
+    if (heldMs >= CONFIG.MAX_HOLD_MINUTES * 60_000) {
+      logger.info({
+        mint: pos.mint,
+        held: `${(heldMs / 60_000).toFixed(1)}m`,
+        maxHold: `${CONFIG.MAX_HOLD_MINUTES}m`,
+        change: `${priceChangePercent.toFixed(1)}%`,
+      }, '⏰ MAX HOLD REACHED — closing stagnant position');
+      await this.executeExit(pos, 'timeout', priceChangePercent);
+      return;
+    }
+
     // Log status periodically every 10 seconds
     if (Math.floor(Date.now() / 10000) !== Math.floor((Date.now() - 1000) / 10000)) {
       logger.debug({
@@ -366,7 +383,7 @@ export class ExitManager {
 
   private async executeExit(
     pos: Position,
-    reason: 'take_profit' | 'stop_loss' | 'trailing_stop' | 'rug_detected' | 'manual' = 'manual',
+    reason: 'take_profit' | 'stop_loss' | 'trailing_stop' | 'rug_detected' | 'timeout' | 'manual' = 'manual',
     priceChange?: number
   ): Promise<void> {
     if (pos.exitTriggered) return;

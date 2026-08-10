@@ -67,6 +67,14 @@ export const CONFIG = {
   EXIT_PROFIT_PERCENT: parseInt(process.env.EXIT_PROFIT_PERCENT || '35'), // Quick take-profit at +35% for fast capital recycling on initial pumps
   EXIT_DRAWDOWN_PERCENT: parseInt(process.env.EXIT_DRAWDOWN_PERCENT || '25'), // Cut losses at -25%
   TRAILING_STOP_PERCENT: parseInt(process.env.TRAILING_STOP_PERCENT || '10'), // 10% drop from peak locks in profit immediately
+  // Hard cap on how long a position may stay open. Without this a token that launches and then
+  // receives no trades at all has literally constant reserves, so its price never moves: it can
+  // never hit take-profit, never hit stop-loss, and never arms the trailing stop (which requires
+  // highWaterMark > entryPrice). Such a position is immortal and permanently occupies one of the
+  // MAX_OPEN_POSITIONS slots. Most pump.fun launches get near-zero volume, so the slots fill with
+  // dead tokens within minutes and the bot silently stops entering anything. Cutting a snipe that
+  // hasn't moved is also the correct strategy call, not just a plumbing fix.
+  MAX_HOLD_MINUTES: parseInt(process.env.MAX_HOLD_MINUTES || '10'),
 
   // Dashboard API security
   API_SECRET_KEY: process.env.API_SECRET_KEY || '',
