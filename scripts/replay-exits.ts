@@ -28,7 +28,18 @@
 import fs from 'fs';
 
 const TICK_FILE = './data/price-ticks.jsonl';
+// price-ticks.jsonl is append-only and has been accumulating since before the bonding-curve byte
+// offsets were fixed, so it still contains the era when reserves were read out of random pooled
+// Buffer memory and produced changePercent values in the quadrillions. A first run of this script
+// over the raw file returned 26 trillion SOL: a handful of corrupt paths swamped everything.
+// trades.jsonl, by contrast, was created fresh on the verified build, so its mints identify
+// exactly the positions whose prices are known to have been computed correctly. Replay only
+// those.
+const TRADE_FILE = './data/trades.jsonl';
 const ENTRY_SOL = 0.05;
+// Same ceiling exit-manager uses to reject garbage reserve reads. Any tick beyond it is a bad
+// read by definition, not a real price, and must never reach the P&L sum.
+const IMPLAUSIBLE_GAIN_PERCENT = 2000;
 // Matches the dry-run cost model in exit-manager.executeExit: ~1% pump.fun fee + Sender tip +
 // a little price impact on a ~0.05 SOL exit. Kept identical so replayed numbers are directly
 // comparable to the live dry-run results rather than optimistic against them.
@@ -61,15 +72,41 @@ const ticks: Tick[] = fs.readFileSync(TICK_FILE, 'utf8')
   .map(l => { try { return JSON.parse(l); } catch { return null; } })
   .filter((t): t is Tick => !!t && typeof t.changePercent === 'number');
 
+// Restrict to the mints in trades.jsonl — the verified-build sample. Everything else in the tick
+// file predates the offset fixes and cannot be trusted.
+if (!fs.existsSync(TRADE_FILE)) {
+  console.error(`No ${TRADE_FILE} — cannot identify which recorded paths are trustworthy.`);
+  process.exit(1);
+}
+const trustedMints = new Set<string>();
+for (const line of fs.readFileSync(TRADE_FILE, 'utf8').split('\n')) {
+  if (!line.trim()) continue;
+  try {
+    const t = JSON.parse(line);
+    if (t.source !== 'amm' && t.mint) trustedMints.add(t.mint);
+  } catch { /* skip malformed line */ }
+}
+
 // A mint can be sniped more than once across restarts, so entryTimestamp is part of the key.
 const paths = new Map<string, Tick[]>();
+let droppedCorrupt = 0;
 for (const t of ticks) {
   if (t.source === 'amm') continue; // bonding-curve track only
+  if (!trustedMints.has(t.mint)) continue;
+  if (!isFinite(t.changePercent) || t.changePercent > IMPLAUSIBLE_GAIN_PERCENT || t.changePercent < -100) {
+    droppedCorrupt++;
+    continue;
+  }
   const key = `${t.mint}:${t.entryTimestamp}`;
   const arr = paths.get(key);
   if (arr) arr.push(t); else paths.set(key, [t]);
 }
 for (const arr of paths.values()) arr.sort((a, b) => a.elapsedMs - b.elapsedMs);
+
+console.log(`trades.jsonl mints (bonding curve): ${trustedMints.size}`);
+console.log(`ticks in file: ${ticks.length} — of which trusted and plausible: ${
+  [...paths.values()].reduce((n, a) => n + a.length, 0)
+}${droppedCorrupt ? ` (${droppedCorrupt} dropped as corrupt)` : ''}`);
 
 /** Replay one recorded path against one rule set. */
 function replay(path: Tick[], p: Params): Outcome {
@@ -121,12 +158,17 @@ function arg(name: string): number | null {
   return i >= 0 && argv[i + 1] ? parseFloat(argv[i + 1]) : null;
 }
 
+const tickCounts = [...paths.values()].map(a => a.length).sort((a, b) => a - b);
 console.log(`positions with recorded paths: ${paths.size}`);
-console.log(`total ticks: ${ticks.length}`);
-console.log(`median ticks per position: ${
-  [...paths.values()].map(a => a.length).sort((a, b) => a - b)[Math.floor(paths.size / 2)]
-}`);
+console.log(`ticks per position — median ${tickCounts[Math.floor(paths.size / 2)]}, max ${tickCounts[tickCounts.length - 1]}`);
 console.log('');
+if (tickCounts[Math.floor(paths.size / 2)] <= 2) {
+  console.log('⚠️  Half these positions have 2 or fewer recorded ticks, i.e. they were entered and');
+  console.log('   exited within ~4 seconds. There is almost no price path to replay, so alternative');
+  console.log('   rule sets have very little room to behave differently. Treat the sweep as weak');
+  console.log('   evidence and read the censored column carefully.');
+  console.log('');
+}
 
 const single = arg('tp') !== null || arg('sl') !== null;
 if (single) {
