@@ -279,6 +279,19 @@ async function main() {
     } catch {}
   }
 
+  // `tradeHistory` is deliberately capped at 50 entries (it feeds the dashboard, and an unbounded
+  // array would be rewritten in full on every exit). But a multi-hour measurement run produces far
+  // more trades than that, so the capped file silently discards most of the sample it was being
+  // collected for. Mirror every completed trade into an append-only log as well: cheap, never
+  // truncated, and trivially aggregated afterwards.
+  const TRADE_LOG_FILE = './data/trades.jsonl';
+  function appendTradeLog(tradeInfo: any) {
+    try {
+      fs.mkdirSync('./data', { recursive: true });
+      fs.appendFileSync(TRADE_LOG_FILE, JSON.stringify(tradeInfo) + '\n');
+    } catch {}
+  }
+
   const botState = {
     isRunning: loadPersistedRunning(),
     get isTestMode() { return CONFIG.DRY_RUN; },
@@ -478,6 +491,7 @@ async function main() {
           if (tradeInfo) {
             tradeHistory.unshift(tradeInfo);
             if (tradeHistory.length > 50) tradeHistory.pop();
+            appendTradeLog(tradeInfo);
             saveTradeHistoryDisk();
             if (tradeInfo.creator && isConfirmedRugExit(tradeInfo.reason, tradeInfo.pnlPercent)) {
               analyzer.recordRug(tradeInfo.creator);
@@ -666,6 +680,7 @@ async function main() {
           if (tradeInfo) {
             tradeHistory.unshift(tradeInfo);
             if (tradeHistory.length > 50) tradeHistory.pop();
+            appendTradeLog(tradeInfo);
             saveTradeHistoryDisk();
             if (tradeInfo.creator && isConfirmedRugExit(tradeInfo.reason, tradeInfo.pnlPercent)) {
               analyzer.recordRug(tradeInfo.creator);
