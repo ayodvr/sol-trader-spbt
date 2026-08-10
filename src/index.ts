@@ -235,7 +235,14 @@ async function main() {
         stats.successfulExits = saved.stats.successfulExits || 0;
         stats.winningExits = saved.stats.winningExits || 0;
         stats.rugSkips = saved.stats.rugSkips || 0;
-        if (Array.isArray(saved.history)) {
+        // Prefer the persisted running total. Recomputing from `history` silently destroys it
+        // on every restart, because history is capped at 50 entries — so a bot with thousands
+        // of exits would reload believing its lifetime P&L was just the last 50 trades. That
+        // is exactly what turned a saved +5.4402 into +1.8524 across one restart. Only fall
+        // back to summing history if no total was ever persisted.
+        if (typeof saved.stats.totalPnl === 'number' && isFinite(saved.stats.totalPnl)) {
+          stats.totalPnl = saved.stats.totalPnl;
+        } else if (Array.isArray(saved.history)) {
           stats.totalPnl = saved.history.reduce((sum: number, item: any) => sum + (typeof item.pnlSol === 'number' ? item.pnlSol : (parseFloat(item.pnlSol) || 0)), 0);
         } else {
           stats.totalPnl = 0;
