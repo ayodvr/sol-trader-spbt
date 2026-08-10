@@ -92,14 +92,13 @@ export class RugAnalyzer {
     // migrate instruction, NOT the original deployer. The actual deployer (who receives fees)
     // is a separate field, Pool::coin_creator, which we're not parsing here. Rather than guess
     // at that field's byte offset, derive the real creator from the token's underlying bonding
-    // curve account instead — every graduated token still has one on-chain, and this exact byte
-    // offset (32-64) is already proven correct elsewhere in this codebase (sell.ts's
-    // readCreator(), used successfully on every bonding-curve sell all session).
-    // This now applies to BOTH tracks. The bonding-curve track's creator was equally unreliable:
-    // it came from a fixed account index in the gRPC create instruction, but those are versioned
-    // transactions using Address Lookup Tables, so that slot usually resolved to garbage — which
-    // is what filled rug-db.json with hundreds of corrupted "1111111113fGWZbwwxFB…" entries.
-    // The curve account is the one authoritative source for either track.
+    // curve account instead — every graduated token still has one on-chain.
+    //
+    // Creator lives at bytes 49-81, verified against a live mainnet account with
+    // scripts/inspect-curve.ts. The codebase previously read 32-64, which spans realSolReserves
+    // and tokenTotalSupply — both zero or near-zero on a fresh token, which is why rug-db.json
+    // filled with "1111111113fGWZbwwxFB…" addresses (leading zero bytes encode as leading 1s in
+    // base58). Those were never real wallets and had nothing to do with Address Lookup Tables.
     let effectiveCreator = creator;
     // Reused by Check 2 below instead of re-fetching the identical account. On the bonding-curve
     // track curveAddr === bondingCurveOrPool, so without this every candidate cost two identical
@@ -112,8 +111,8 @@ export class RugAnalyzer {
       // milliseconds ago isn't visible at the connection's default 'confirmed' commitment.
       const curveAcc = await withRpcRetry(() => this.connection.getAccountInfo(curveAddr, 'processed'));
       if (!isAmm) cachedCurveAccount = curveAcc;
-      if (curveAcc && curveAcc.data.length >= 64) {
-        effectiveCreator = new PublicKey(curveAcc.data.subarray(32, 64));
+      if (curveAcc && curveAcc.data.length >= 81) {
+        effectiveCreator = new PublicKey(curveAcc.data.subarray(49, 81));
       }
     } catch { /* fall back to whatever was passed in, if anything */ }
 
@@ -271,8 +270,8 @@ export class RugAnalyzer {
         if (curveAccount) {
           const view = new DataView(curveAccount.data.buffer, curveAccount.data.byteOffset, curveAccount.data.byteLength);
 
-          const virtualTokenReserves = view.getBigUint64(64, true);
-          const realTokenReserves = view.getBigUint64(80, true);
+          const virtualTokenReserves = view.getBigUint64(8, true);
+          const realTokenReserves = view.getBigUint64(24, true);
           curveRealTokenReserves = realTokenReserves;
 
           if (virtualTokenReserves > 0n) {

@@ -185,11 +185,13 @@ export class ExitManager {
       }
 
       const view = new DataView(curveAccount.data.buffer, curveAccount.data.byteOffset, curveAccount.data.byteLength);
-      const virtualTokenReserves = view.getBigUint64(64, true);
-      const virtualSolReserves = view.getBigUint64(72, true);
+      const virtualTokenReserves = view.getBigUint64(8, true);
+      const virtualSolReserves = view.getBigUint64(16, true);
 
-      // Check if bonding curve completed (complete byte at offset 88 or reserves depleted)
-      const isComplete = curveAccount.data.length > 88 ? curveAccount.data[88] !== 0 : false;
+      // `complete` is a bool at offset 48, immediately after the five u64 fields — verified
+      // against a live mainnet curve account (scripts/inspect-curve.ts). It was previously read
+      // at 88, which sits inside the creator pubkey.
+      const isComplete = curveAccount.data.length > 48 ? curveAccount.data[48] !== 0 : false;
 
       if (isComplete || virtualTokenReserves < 1_000_000n) {
         // ✅ Fix 3: Token graduated to PumpSwap AMM — don't fake a 10x price, switch to real AMM sell

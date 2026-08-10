@@ -72,7 +72,7 @@ export function isCashbackEnabled(bondingCurveData: Buffer): boolean {
 }
 
 function readCreator(bondingCurveData: Buffer): PublicKey {
-  return new PublicKey(bondingCurveData.subarray(32, 64));
+  return new PublicKey(bondingCurveData.subarray(49, 81));
 }
 
 /**
@@ -104,8 +104,8 @@ export async function sell(
     const cashback = isCashbackEnabled(curveData);
 
     const view = new DataView(curveData.buffer, curveData.byteOffset, curveData.byteLength);
-    const virtualTokenReserves = view.getBigUint64(64, true);
-    const virtualSolReserves = view.getBigUint64(72, true);
+    const virtualTokenReserves = view.getBigUint64(8, true);
+    const virtualSolReserves = view.getBigUint64(16, true);
 
     if (virtualTokenReserves === 0n) {
       return { success: false, error: 'Zero virtual token reserves — cannot sell' };

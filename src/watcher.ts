@@ -80,7 +80,7 @@ export class PumpWatcher {
     const mintBytes = data.subarray(0, 32);
     const mint = new PublicKey(mintBytes);
 
-    const creatorBytes = data.subarray(32, 64);
+    const creatorBytes = data.subarray(49, 81);
     const creator = new PublicKey(creatorBytes);
 
     const expectedCurve = deriveBondingCurve(mint);

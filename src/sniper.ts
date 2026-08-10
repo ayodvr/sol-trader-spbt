@@ -118,8 +118,8 @@ export class PumpSniper {
         }
 
         const view = new DataView(curveAccount.data.buffer, curveAccount.data.byteOffset, curveAccount.data.byteLength);
-        const virtualTokenReserves = view.getBigUint64(64, true);
-        const virtualSolReserves = view.getBigUint64(72, true);
+        const virtualTokenReserves = view.getBigUint64(8, true);
+        const virtualSolReserves = view.getBigUint64(16, true);
 
         // Calculate estimated tokens with 1% fee
         const solAfterFee = BigInt(Math.floor(solAmountLamports * 0.99));
