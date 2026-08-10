@@ -92,7 +92,9 @@ async function main() {
   // ─── Shared components ───
   const analyzer = new RugAnalyzer();
   const connection = new Connection(CONFIG.RPC_URL, 'confirmed');
-  blockhashCache.startFallback(connection, 2000);
+  // Started below only if the bot is actually running — see the botState.isRunning check after
+  // the watchers are wired. Starting it unconditionally here meant a paused bot still polled
+  // getLatestBlockhash every 2 seconds indefinitely.
 
   // ─── Stats ───
   const stats = {
@@ -294,6 +296,7 @@ async function main() {
         activeWatcher.start(watcherCallback);
       }
       startAmmWatcher();
+      blockhashCache.startFallback(connection, 2000);
     },
     stop: () => {
       botState.isRunning = false;
@@ -308,6 +311,10 @@ async function main() {
       // and billed whether we act on them or not. That is why a "paused" bot kept draining
       // credits with no visible activity. Actually unsubscribe.
       stopAmmWatcher();
+      // Polls getLatestBlockhash every 2s — ~43k billed calls/day — and a paused bot never
+      // submits a transaction, so it has nothing to cache for. stopFallback() existed but was
+      // never wired to the pause path.
+      blockhashCache.stopFallback();
     },
     forceExit: async (mint: string) => {
       for (const em of exitManagers) {
@@ -694,8 +701,9 @@ async function main() {
 
   if (botState.isRunning) {
     await startAmmWatcher();
+    blockhashCache.startFallback(connection, 2000);
   } else {
-    logger.info('⏸️ Bot is paused — AMM pool subscription not started');
+    logger.info('⏸️ Bot is paused — AMM pool subscription and blockhash polling not started');
   }
 
   // ─── Periodic wallet maintenance (every 5 minutes) ───
