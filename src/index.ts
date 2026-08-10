@@ -687,6 +687,7 @@ async function main() {
   // Subscription lifecycle so pausing genuinely stops the billed notification stream.
   let ammSubId: number | null = null;
   async function startAmmWatcher(): Promise<void> {
+    if (!CONFIG.AMM_TRACK_ENABLED) return;
     if (ammSubId !== null) return;
     ammSubId = await watchAmmPoolCreations(connection, ammPoolHandler);
   }
@@ -697,6 +698,10 @@ async function main() {
     connection.removeProgramAccountChangeListener(id)
       .then(() => logger.info('🛑 AMM pool subscription closed (paused — no longer billing notifications)'))
       .catch((err: any) => logger.warn({ err: err.message }, 'Failed to close AMM pool subscription'));
+  }
+
+  if (!CONFIG.AMM_TRACK_ENABLED) {
+    logger.warn('🚫 AMM track (Track 2) is DISABLED — its pool reserve offsets are known-wrong. Bonding-curve track only.');
   }
 
   if (botState.isRunning) {

@@ -35,6 +35,15 @@ export const CONFIG = {
   // your own SNIPE_AMOUNT_SOL, it's a filter on the target pool's existing depth.
   MIN_POOL_LIQUIDITY_SOL: parseFloat(process.env.MIN_POOL_LIQUIDITY_SOL || '40'),
 
+  // Track 2 (PumpSwap AMM entry). Disabled by default: its reserve reads were verified wrong
+  // against a live pool (scripts/inspect-pool.ts) — offsets 107/115 land inside the lpMint
+  // pubkey, and PumpSwap keeps real reserves in the pool's two SPL token accounts, not on the
+  // pool account itself. Every AMM price, liquidity gate and exit was therefore computed from
+  // garbage. Fixing it properly also means re-pointing the WS/gRPC subscriptions, since the
+  // pool account barely changes when trades occur. Left off so the bonding-curve strategy can
+  // be measured cleanly; set AMM_TRACK_ENABLED=true once that path is actually repaired.
+  AMM_TRACK_ENABLED: process.env.AMM_TRACK_ENABLED === 'true',
+
   // Pre-buy observation window (AMM track): after a pool passes the anti-rug checks, watch its
   // price for this long before actually buying — abort if it drops more than the threshold
   // during the window. Catches pools that get dumped within the first couple seconds, which a
