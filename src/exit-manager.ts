@@ -104,6 +104,10 @@ export class ExitManager {
   private poolMissCount: Map<string, number> = new Map();
   // How many failed sell retries before giving up on a position and alerting for manual action
   private readonly MAX_EXIT_ATTEMPTS = 20;
+  // Bounded retries for resolving a graduated token's AMM pool — see the graduation branch in
+  // checkExitConditions. ~15 attempts at the 2s poll is 30s, well past normal indexing delay.
+  private graduationAttempts: Map<string, number> = new Map();
+  private readonly MAX_GRADUATION_ATTEMPTS = 15;
 
   private startMonitoring(mint: string): void {
     const interval = setInterval(async () => {
@@ -194,8 +198,13 @@ export class ExitManager {
       const isComplete = curveAccount.data.length > 48 ? curveAccount.data[48] !== 0 : false;
 
       if (isComplete || virtualTokenReserves < 1_000_000n) {
-        // ✅ Fix 3: Token graduated to PumpSwap AMM — don't fake a 10x price, switch to real AMM sell
-        logger.info({ mint: pos.mint }, '🎓 Bonding curve completed — token graduated, switching to AMM sell path');
+        // Token graduated to PumpSwap — the bonding curve can no longer price or sell it.
+        // This used to retry forever when fetchAmmPool came back empty: one stuck position
+        // re-ran a 6-account pool search every 2s indefinitely, never closing and quietly
+        // burning RPC credits. Bound the attempts and then close it out.
+        const attempts = (this.graduationAttempts.get(pos.mint) || 0) + 1;
+        this.graduationAttempts.set(pos.mint, attempts);
+
         if (!pos.poolInfo) {
           try {
             const ammPool = await fetchAmmPool(this.connection, mintKey);
@@ -204,14 +213,23 @@ export class ExitManager {
               pos.source = 'amm';
               logger.info({ mint: pos.mint }, '✅ AMM pool found for graduated token — executing AMM exit');
             }
-          } catch { /* pool not yet indexed — wait for next tick */ }
+          } catch { /* pool not yet indexed — bounded retry below */ }
         } else {
           pos.source = 'amm';
         }
+
         if (pos.source === 'amm' && pos.poolInfo) {
+          this.graduationAttempts.delete(pos.mint);
           await this.executeExit(pos, 'take_profit', 0);
+        } else if (attempts >= this.MAX_GRADUATION_ATTEMPTS) {
+          // Give up on routing through the AMM. Graduating is a *good* outcome — the token
+          // survived the curve — so record it as such rather than as a rug, but stop paying
+          // to look for a pool we can't find.
+          logger.warn({ mint: pos.mint, attempts }, '🎓 Graduated but no AMM pool resolvable — closing position');
+          this.graduationAttempts.delete(pos.mint);
+          await this.executeExit(pos, 'manual', 0);
         } else {
-          logger.debug({ mint: pos.mint }, '⏳ AMM pool not yet indexed for graduated token — retrying next tick');
+          logger.debug({ mint: pos.mint, attempts }, '⏳ AMM pool not yet indexed for graduated token — retrying');
         }
         return;
       } else {
@@ -597,6 +615,7 @@ export class ExitManager {
     }
     this.positions.delete(mint);
     this.poolMissCount.delete(mint);
+    this.graduationAttempts.delete(mint);
   }
 
   /**

@@ -274,17 +274,24 @@ export class RugAnalyzer {
           const realTokenReserves = view.getBigUint64(24, true);
           curveRealTokenReserves = realTokenReserves;
 
-          if (virtualTokenReserves > 0n) {
-            const tokenDeviation = Number(
-              (virtualTokenReserves - realTokenReserves) * 10000n / virtualTokenReserves
+          // Measure how much of the curve's sellable allocation has already been bought, rather
+          // than raw (virtual - real) / virtual. Every pump.fun curve launches at virtual
+          // 1.073e15 / real 7.931e14, i.e. 26.08% deviation before a single trade — so the old
+          // ">5% = -25" rule docked EVERY token 25 points for existing, pinning fresh candidates
+          // at exactly MIN_RUG_SCORE and letting any second flag reject them. Percent-sold is
+          // the meaningful signal for a sniper: near 0% means we're early, high means we're late.
+          const INITIAL_REAL_TOKEN_RESERVES = 793_100_000_000_000n;
+          if (realTokenReserves > 0n && realTokenReserves <= INITIAL_REAL_TOKEN_RESERVES) {
+            const percentSold = Number(
+              (INITIAL_REAL_TOKEN_RESERVES - realTokenReserves) * 10000n / INITIAL_REAL_TOKEN_RESERVES
             ) / 100;
 
-            if (tokenDeviation > 30) {
-              result.flags.push(`HIGH_TOKEN_DEVIATION: ${tokenDeviation}%`);
+            if (percentSold > 50) {
+              result.flags.push(`LATE_ENTRY: ${percentSold.toFixed(1)}% of curve already sold`);
               result.score -= 45;
-            } else if (tokenDeviation > 5) {
-              result.flags.push(`HIGH_TOKEN_DEVIATION: ${tokenDeviation}%`);
-              result.score -= 25;
+            } else if (percentSold > 25) {
+              result.flags.push(`LATE_ENTRY: ${percentSold.toFixed(1)}% of curve already sold`);
+              result.score -= 20;
             }
           }
         }
