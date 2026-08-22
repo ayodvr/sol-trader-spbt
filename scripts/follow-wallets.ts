@@ -49,12 +49,17 @@ import { deriveBondingCurve } from '../src/utils.js';
 
 const PUMPERS_FILE = './data/pumpers.json';
 const OUT_FILE = './data/follows.jsonl';
-const TRACK_MS = 1_800_000;   // follow each bought token for 30 minutes
 const POLL_MS = 30_000;
 
 const argv = process.argv.slice(2);
 const argOf = (n: string) => { const i = argv.indexOf(`--${n}`); return i >= 0 ? (argv[i + 1] ?? null) : null; };
 const THRESHOLD_SOL = parseFloat(argOf('threshold') || '100');
+// Originally a fixed 30 minutes. follow-ev.ts then measured a p90 peak multiple of only 1.78x,
+// which is what made copying lose (-9.9% EV) despite genuinely good selection - 19.5% precision
+// against a ~3.9% base rate. But 30 minutes may simply be too short a window to see the winners
+// finish running. Collect a longer path and let follow-ev.ts --maxhours slice it, so the horizon
+// question is answered from one dataset instead of a second collection run.
+const TRACK_MS = parseFloat(argOf('trackhours') || '4') * 3_600_000;
 
 interface Follow {
   wallet: string;
@@ -185,7 +190,7 @@ async function collect(hours: number) {
     accountsDataSlice: [], commitment: 0,
   });
 
-  console.log(`Following ${watchList.length} wallets for ${hours}h:`);
+  console.log(`Following ${watchList.length} wallets for ${hours}h, tracking each buy for ${(TRACK_MS / 3_600_000).toFixed(1)}h:`);
   for (const w of watchList) console.log(`  ${w}`);
   console.log('');
 

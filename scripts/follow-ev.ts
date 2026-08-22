@@ -50,6 +50,10 @@ const TP = parseFloat(argOf('tp') || '100');
 const SL = parseFloat(argOf('sl') || '25');
 const DROP_BEST = parseInt(argOf('dropbest') || '0', 10);
 const MIN_BUYS = parseInt(argOf('minbuys') || '5', 10);
+// Cap how much of each recorded path is used. With 4h of path collected, running this at 0.5, 1, 2
+// and 4 answers whether the winners keep growing or the losers just bleed longer - on identical
+// tokens, so the comparison is clean.
+const MAX_HOURS = parseFloat(argOf('maxhours') || '99');
 
 interface Follow { wallet: string; mint: string; seenAt: number; offsetMs: number; mcapAtBuy: number; mcapNow: number; sampleOffsetMs: number; }
 
@@ -61,6 +65,7 @@ for (const line of fs.readFileSync(FILE, 'utf8').split('\n')) {
   try {
     const f: Follow = JSON.parse(line);
     if (!f?.mint || !isFinite(f.mcapNow) || !isFinite(f.mcapAtBuy) || f.mcapAtBuy <= 0) continue;
+    if (f.sampleOffsetMs > MAX_HOURS * 3_600_000) continue;
     const key = `${f.wallet}:${f.mint}:${f.seenAt}`;
     const a = byBuy.get(key);
     if (a) a.push(f); else byBuy.set(key, [f]);
@@ -91,6 +96,7 @@ const trimmed = (xs: number[]) => DROP_BEST > 0 ? [...xs].sort((a, b) => b - a).
 console.log(`copied trades:  ${buys.length}`);
 console.log(`exit rule:      TP +${TP}% / SL -${SL}%, ${COST_PCT}% round-trip cost`);
 if (DROP_BEST > 0) console.log(`dropping best:  ${DROP_BEST} trade(s)`);
+if (MAX_HOURS < 99) console.log(`window capped:  ${MAX_HOURS}h after entry`);
 console.log(`entry price:    the wallet's own — best case, NOT achievable (they buy 0.9s after launch)\n`);
 
 // ── Aggregate ──────────────────────────────────────────────────────────────────────────────
