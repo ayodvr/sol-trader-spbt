@@ -49,6 +49,11 @@ const argOf = (n: string) => { const i = argv.indexOf(`--${n}`); return i >= 0 ?
 const TP = parseFloat(argOf('tp') || '50');
 const SL = parseFloat(argOf('sl') || '25');
 const MIN_DEPTH = parseFloat(argOf('mindepth') || '20');
+// Robustness check. In a fat-tailed sample a single outlier can be the whole mean: at n=66 with a
+// best trade of +998%, that one token contributes ~+15% of the average on its own. Dropping the
+// top N trades shows whether a positive EV is an edge or one lucky ticket that happened to land
+// inside the observation window.
+const DROP_BEST = parseInt(argOf('dropbest') || '0', 10);
 
 interface Sample { pool: string; gradAt: number; offsetMs: number; price: number; quoteReserve: string; }
 
@@ -121,15 +126,18 @@ function evaluate(set: Sample[][], label: string) {
       const r = simulate(g, fromIdx);
       if (r !== null) results.push(r);
     }
-    const m = mean(results);
+    const kept = DROP_BEST > 0
+      ? [...results].sort((a, b) => b - a).slice(DROP_BEST)
+      : results;
+    const m = mean(kept);
     return {
       entry: b.label,
-      n: results.length,
-      'net EV': results.length ? `${m >= 0 ? '+' : ''}${m.toFixed(1)}%` : 'n/a',
-      'win rate': results.length ? `${(results.filter(x => x > 0).length / results.length * 100).toFixed(0)}%` : 'n/a',
-      'best': results.length ? `+${Math.max(...results).toFixed(0)}%` : 'n/a',
-      _ev: results.length >= 25 ? m : -Infinity,
-      _n: results.length,
+      n: kept.length,
+      'net EV': kept.length ? `${m >= 0 ? '+' : ''}${m.toFixed(1)}%` : 'n/a',
+      'win rate': kept.length ? `${(kept.filter(x => x > 0).length / kept.length * 100).toFixed(0)}%` : 'n/a',
+      'best': kept.length ? `+${Math.max(...kept).toFixed(0)}%` : 'n/a',
+      _ev: kept.length >= 25 ? m : -Infinity,
+      _n: kept.length,
     };
   });
   console.table(rows.map(({ _ev, _n, ...r }) => r));
